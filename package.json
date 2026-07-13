@@ -1,0 +1,62 @@
+{
+  "name": "aiflow-engine",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Vendor-neutral document workflow engine for AiFlow.",
+  "packageManager": "bun@1.3.10",
+  "engines": {
+    "node": ">=24 <25",
+    "bun": "1.3.10"
+  },
+  "workspaces": [
+    "apps/*",
+    "packages/config",
+    "packages/core",
+    "packages/database",
+    "packages/messaging",
+    "packages/storage",
+    "packages/connector-sdk",
+    "packages/connector-test-suite",
+    "packages/workflows",
+    "packages/connections",
+    "packages/documents",
+    "packages/executions",
+    "packages/extraction",
+    "packages/mappings",
+    "packages/review",
+    "packages/templates",
+    "packages/connectors/*"
+  ],
+  "bin": {
+    "aiflow-engine": "./scripts/aiflow-engine.cjs"
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "clean": "tsc -b --clean",
+    "typecheck": "tsc -b --pretty false",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "jest --runInBand",
+    "test:watch": "jest --watch",
+    "test:coverage": "jest --coverage --runInBand",
+    "check": "bun run lint && bun run typecheck && bun run test && bun run format:check",
+    "start": "bun run start:api",
+    "start:api": "node scripts/aiflow-engine.cjs api",
+    "start:worker": "node scripts/aiflow-engine.cjs worker",
+    "start:scheduler": "node scripts/aiflow-engine.cjs scheduler",
+    "watch": "tsc -b --watch --preserveWatchOutput"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@types/jest": "29.5.14",
+    "@types/node": "24.13.3",
+    "eslint": "10.7.0",
+    "globals": "17.7.0",
+    "jest": "29.7.0",
+    "prettier": "3.9.5",
+    "ts-jest": "29.4.11",
+    "typescript": "5.9.3",
+    "typescript-eslint": "8.63.0"
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "files": [],
+  "references": [
+    { "path": "./packages/config" },
+    { "path": "./packages/core" },
+    { "path": "./packages/database" },
+    { "path": "./packages/messaging" },
+    { "path": "./packages/storage" },
+    { "path": "./packages/connector-sdk" },
+    { "path": "./packages/connector-test-suite" },
+    { "path": "./packages/workflows" },
+    { "path": "./packages/connections" },
+    { "path": "./packages/documents" },
+    { "path": "./packages/executions" },
+    { "path": "./packages/extraction" },
+    { "path": "./packages/mappings" },
+    { "path": "./packages/review" },
+    { "path": "./packages/templates" },
+    { "path": "./packages/connectors/direct-upload" },
+    { "path": "./packages/connectors/generic-webhook" },
+    { "path": "./packages/connectors/microsoft-sharepoint" },
+    { "path": "./packages/connectors/microsoft-business-central" },
+    { "path": "./packages/connectors/dynamics-nav" },
+    { "path": "./apps/api" },
+    { "path": "./apps/worker" },
+    { "path": "./apps/scheduler" }
+  ]
+}
