@@ -22,8 +22,8 @@ aiflow-engine scheduler
 
 Requirements:
 
-- Bun 1.3.10
-- Node.js 24 LTS
+- Bun 1.3.14
+- Node.js 24.18.0 LTS
 - Docker for optional image verification
 
 ```bash
@@ -71,17 +71,19 @@ docs/
     auth-tenancy.md
     canonical-api-v1.md
     devportal-compatibility.md
+    platform-baseline.md
     schemas/
       workflow-definition.v1.schema.json
   decisions/
     0000-template.md
+    0001-current-stable-versions.md
     README.md
   roadmap.md
 ```
 
 Infrastructure and domain packages are deliberately empty boundaries. PostgreSQL, RabbitMQ, S3, connector behavior, workflow state transitions, and DevPortal compatibility endpoints will be implemented phase by phase.
 
-Implementation sequencing is defined in [`docs/roadmap.md`](docs/roadmap.md). Phase 0B contracts currently include the [`canonical API v1`](docs/contracts/canonical-api-v1.md) and [`DevPortal compatibility discovery`](docs/contracts/devportal-compatibility.md).
+Implementation sequencing is defined in [`docs/roadmap.md`](docs/roadmap.md). Phase 0B contracts currently include the [`canonical API v1`](docs/contracts/canonical-api-v1.md), [`DevPortal compatibility discovery`](docs/contracts/devportal-compatibility.md), and [`platform baseline`](docs/contracts/platform-baseline.md).
 
 ## Repository policy
 

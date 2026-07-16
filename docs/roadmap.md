@@ -49,11 +49,12 @@ Progress:
 - DevPortal compatibility discovery baseline: [`contracts/devportal-compatibility.md`](contracts/devportal-compatibility.md).
 - Direct canonical API v1 and workflow-definition envelope: [`contracts/canonical-api-v1.md`](contracts/canonical-api-v1.md).
 - Authentication, tenancy, permission, and project-authorization contract: [`contracts/auth-tenancy.md`](contracts/auth-tenancy.md).
+- Platform baseline, verified legacy evidence, target integration rules, and owner-confirmation checklist: [`contracts/platform-baseline.md`](contracts/platform-baseline.md).
 
 Required decisions:
 
-1. PostgreSQL version, connection budget, migration process, backup/PITR guarantees, RPO, and RTO.
-2. RabbitMQ version, cluster topology, quorum queue support, TLS/authentication, virtual-host convention, and KEDA availability.
+1. Confirm PostgreSQL 18.4 availability, connection budget, migration process, backup/PITR guarantees, RPO, and RTO.
+2. Confirm RabbitMQ 4.3.2 availability, cluster topology, quorum queue support, TLS/authentication, virtual-host convention, and KEDA availability.
 3. S3 bucket, KMS key, lifecycle, private connectivity, EKS identity, and maximum-object conventions.
 4. Authentication token validation plus canonical tenant, actor, role, and service-identity claims.
 5. Third-party OCR request/callback contract, authentication, quotas, timeout, retry, idempotency, and reconciliation capability.

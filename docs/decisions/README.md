@@ -14,3 +14,7 @@ Architecture Decision Records (ADRs) preserve important choices, their context, 
 Valid statuses are `Proposed`, `Accepted`, `Rejected`, `Deprecated`, and `Superseded by ADR-NNNN`.
 
 An ADR records a decision; contracts define exact external behavior, and runbooks define operations. Link them rather than duplicating them.
+
+## Accepted records
+
+- [ADR-0001: Use Current Stable Compatible Versions](0001-current-stable-versions.md)
