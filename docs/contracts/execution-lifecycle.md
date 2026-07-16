@@ -50,6 +50,8 @@ Conceptual stage-attempt fields:
 
 These fields establish behavior and auditability. Phase 1 will define physical schemas and indexes separately.
 
+The agreed physical ownership, constraints, guarded-update strategy, and retention proposal are defined in [`postgresql-v1.md`](postgresql-v1.md).
+
 ## Execution states
 
 | State             | Terminal | Meaning                                                              |

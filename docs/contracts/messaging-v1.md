@@ -10,6 +10,8 @@ RabbitMQ transports short-lived commands that tell workers durable work may be e
 
 A worker must load authoritative state from PostgreSQL and win an atomic state/lease guard before doing work. Message order is not trusted.
 
+The outbox/inbox records, claim transactions, leases, indexes, and retention rules are defined in [`postgresql-v1.md`](postgresql-v1.md).
+
 Delivery is at least once. Publisher confirms and consumer acknowledgements reduce message loss but do not remove duplicate-delivery cases, so handlers must be idempotent. This matches RabbitMQ's [reliability guidance](https://www.rabbitmq.com/docs/reliability).
 
 ## Envelope
@@ -51,7 +53,7 @@ Rules:
 - `actor` is the normalized audit identity snapshot. It contains no token, role, or permission list.
 - `expectedStateVersion` lets the consumer reject stale or out-of-order work without guessing.
 - `trace` is optional W3C trace context and is not an authorization input.
-- The encoded envelope, including application headers, is limited to 64 KiB. Larger configuration and results belong in PostgreSQL; document bytes and artifacts belong in S3.
+- The encoded envelope, including application headers, is limited to 64 KiB. Larger validated configuration belongs in PostgreSQL; document and processing payloads/artifacts belong in S3 with bounded PostgreSQL references.
 
 ## Command types and data
 
