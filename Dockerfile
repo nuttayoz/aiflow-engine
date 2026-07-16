@@ -1,4 +1,4 @@
-FROM oven/bun:1.3.10 AS dependencies
+FROM oven/bun:1.3.14 AS dependencies
 
 WORKDIR /app
 
@@ -10,7 +10,7 @@ FROM dependencies AS build
 
 RUN bun run build
 
-FROM oven/bun:1.3.10 AS production-dependencies
+FROM oven/bun:1.3.14 AS production-dependencies
 
 WORKDIR /app
 
@@ -18,7 +18,7 @@ COPY . .
 
 RUN bun install --production --frozen-lockfile
 
-FROM node:24.17.0-bookworm-slim AS runtime
+FROM node:24.18.0-bookworm-slim AS runtime
 
 ENV NODE_ENV=production
 

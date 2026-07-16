@@ -1,0 +1,132 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:aiflow-engine:schema:workflow-definition:v1",
+  "title": "AiFlow Workflow Definition v1",
+  "description": "Provider-neutral workflow definition envelope. Connector and extraction config objects require additional descriptor-specific validation.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "entry",
+    "extraction",
+    "mappings",
+    "reviewPolicy",
+    "destination"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": 1
+    },
+    "entry": {
+      "$ref": "#/$defs/entryBinding"
+    },
+    "extraction": {
+      "$ref": "#/$defs/extractionBinding"
+    },
+    "mappings": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/mappingRule"
+      }
+    },
+    "reviewPolicy": {
+      "$ref": "#/$defs/reviewPolicy"
+    },
+    "destination": {
+      "$ref": "#/$defs/destinationBinding"
+    }
+  },
+  "$defs": {
+    "entryBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["connectorId", "config"],
+      "properties": {
+        "connectorId": {
+          "$ref": "#/$defs/opaqueId"
+        },
+        "connectionId": {
+          "$ref": "#/$defs/opaqueId"
+        },
+        "config": {
+          "$ref": "#/$defs/configObject"
+        }
+      }
+    },
+    "extractionBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["profileId", "config"],
+      "properties": {
+        "profileId": {
+          "$ref": "#/$defs/opaqueId"
+        },
+        "config": {
+          "$ref": "#/$defs/configObject"
+        }
+      }
+    },
+    "destinationBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["connectorId", "actionId", "config"],
+      "properties": {
+        "connectorId": {
+          "$ref": "#/$defs/opaqueId"
+        },
+        "connectionId": {
+          "$ref": "#/$defs/opaqueId"
+        },
+        "actionId": {
+          "$ref": "#/$defs/opaqueId"
+        },
+        "config": {
+          "$ref": "#/$defs/configObject"
+        }
+      }
+    },
+    "mappingRule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sourceField", "targetField"],
+      "properties": {
+        "sourceField": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "targetField": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "required": {
+          "type": "boolean",
+          "default": false
+        }
+      }
+    },
+    "reviewPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["required"],
+      "properties": {
+        "required": {
+          "type": "boolean"
+        },
+        "expiresAfterSeconds": {
+          "type": "integer",
+          "minimum": 60
+        }
+      }
+    },
+    "opaqueId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "configObject": {
+      "type": "object"
+    }
+  }
+}
