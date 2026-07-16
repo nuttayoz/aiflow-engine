@@ -75,6 +75,8 @@ Treat those values as exposed: rotate them, remove plaintext values from the cur
 - Obtain one total engine connection budget, then divide it across maximum API, worker, and scheduler replicas. Do not size pools independently.
 - PostgreSQL remains the system of record for execution state, outbox, inbox, idempotency, leases, and audit facts.
 
+The Phase 0B database/schema ownership, logical record model, tenancy constraints, concurrency, migration, connection-budget, retention, and recovery proposal is defined in [`postgresql-v1.md`](postgresql-v1.md).
+
 ### RabbitMQ
 
 - Target RabbitMQ 4.3.2.
