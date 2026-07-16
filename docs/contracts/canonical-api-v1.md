@@ -64,7 +64,7 @@ The normalized security model is defined in [`auth-tenancy.md`](auth-tenancy.md)
 | `ExtractionProfile`   | Available extraction provider capability and output-field schema                                    |
 | `UploadSession`       | Authorized direct-to-S3 upload plan and completion boundary                                         |
 | `Document`            | Immutable staged object metadata and source identity                                                |
-| `Execution`           | One durable processing attempt through the workflow state machine                                   |
+| `Execution`           | One durable end-to-end run through the workflow state machine                                       |
 | `ReviewTask`          | Human review state attached to an execution                                                         |
 
 ## Workflow definition schema
@@ -298,6 +298,8 @@ Connection responses never expose refresh tokens, client secrets, encrypted prov
 | `POST /api/v1/executions/:executionId/retries`           | Request a guarded retry from an allowed failed state                  |
 
 Upload-session creation accepts only file metadata such as name, content type, size, checksum, and multipart preference. Completion returns an `executionId`; background processing never holds the upload HTTP request open.
+
+The provider-neutral states, attempts, transition guards, failure categories, and manual-retry behavior are defined in [`execution-lifecycle.md`](execution-lifecycle.md).
 
 ## Review endpoints
 

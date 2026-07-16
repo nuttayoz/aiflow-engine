@@ -71,8 +71,11 @@ docs/
     auth-tenancy.md
     canonical-api-v1.md
     devportal-compatibility.md
+    execution-lifecycle.md
+    messaging-v1.md
     platform-baseline.md
     schemas/
+      message-envelope.v1.schema.json
       workflow-definition.v1.schema.json
   decisions/
     0000-template.md
@@ -83,7 +86,7 @@ docs/
 
 Infrastructure and domain packages are deliberately empty boundaries. PostgreSQL, RabbitMQ, S3, connector behavior, workflow state transitions, and DevPortal compatibility endpoints will be implemented phase by phase.
 
-Implementation sequencing is defined in [`docs/roadmap.md`](docs/roadmap.md). Phase 0B contracts currently include the [`canonical API v1`](docs/contracts/canonical-api-v1.md), [`DevPortal compatibility discovery`](docs/contracts/devportal-compatibility.md), and [`platform baseline`](docs/contracts/platform-baseline.md).
+Implementation sequencing is defined in [`docs/roadmap.md`](docs/roadmap.md). Phase 0B contracts currently include the [`canonical API v1`](docs/contracts/canonical-api-v1.md), [`execution lifecycle`](docs/contracts/execution-lifecycle.md), [`RabbitMQ messaging v1`](docs/contracts/messaging-v1.md), [`DevPortal compatibility discovery`](docs/contracts/devportal-compatibility.md), and [`platform baseline`](docs/contracts/platform-baseline.md).
 
 ## Repository policy
 

@@ -85,6 +85,8 @@ Treat those values as exposed: rotate them, remove plaintext values from the cur
 - Messages carry versioned identifiers and metadata only—never document bytes, credentials, tokens, or presigned URLs.
 - KEDA is optional. Use it only if already approved by the platform; otherwise use the existing metrics/HPA path.
 
+The Phase 0B envelope, bounded topology, acknowledgement boundary, business-retry separation, and DLQ proposal are defined in [`messaging-v1.md`](messaging-v1.md).
+
 ### Amazon S3
 
 - Use a private bucket per environment or the platform-approved equivalent isolation.

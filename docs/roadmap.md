@@ -50,6 +50,8 @@ Progress:
 - Direct canonical API v1 and workflow-definition envelope: [`contracts/canonical-api-v1.md`](contracts/canonical-api-v1.md).
 - Authentication, tenancy, permission, and project-authorization contract: [`contracts/auth-tenancy.md`](contracts/auth-tenancy.md).
 - Platform baseline, verified legacy evidence, target integration rules, and owner-confirmation checklist: [`contracts/platform-baseline.md`](contracts/platform-baseline.md).
+- Provider-neutral execution lifecycle, guarded transitions, attempts, retries, waits, leases, and recovery: [`contracts/execution-lifecycle.md`](contracts/execution-lifecycle.md).
+- RabbitMQ v1 envelope, bounded topology, delivery semantics, retry separation, and DLQ handling: [`contracts/messaging-v1.md`](contracts/messaging-v1.md).
 
 Required decisions:
 
@@ -67,8 +69,8 @@ Deliverables:
 
 - Versioned integration-contract notes or ADRs.
 - Initial canonical API resource names and error envelope.
-- Initial execution states and transition table.
-- Initial RabbitMQ exchange/queue/message naming proposal.
+- Initial execution states and transition table: [`contracts/execution-lifecycle.md`](contracts/execution-lifecycle.md).
+- Initial RabbitMQ exchange/queue/message naming proposal: [`contracts/messaging-v1.md`](contracts/messaging-v1.md).
 - Initial PostgreSQL ownership and migration proposal.
 - Compatibility inventory for the existing DevPortal and `devportal-backend`.
 
