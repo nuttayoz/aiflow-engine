@@ -1,0 +1,91 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aiflow.aigencorp.com/schemas/message-envelope.v1.schema.json",
+  "title": "AiFlow Engine message envelope v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "messageId",
+    "kind",
+    "type",
+    "occurredAt",
+    "tenantId",
+    "projectId",
+    "correlationId",
+    "causationId",
+    "actor",
+    "data"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": 1
+    },
+    "messageId": {
+      "$ref": "#/$defs/opaqueId"
+    },
+    "kind": {
+      "enum": ["COMMAND", "EVENT"]
+    },
+    "type": {
+      "type": "string",
+      "pattern": "^aiflow\\.[a-z0-9]+(?:\\.[a-z0-9-]+)*\\.v[1-9][0-9]*$",
+      "maxLength": 180
+    },
+    "occurredAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "tenantId": {
+      "$ref": "#/$defs/opaqueId"
+    },
+    "projectId": {
+      "$ref": "#/$defs/opaqueId"
+    },
+    "correlationId": {
+      "$ref": "#/$defs/opaqueId"
+    },
+    "causationId": {
+      "$ref": "#/$defs/opaqueId"
+    },
+    "actor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "id"],
+      "properties": {
+        "type": {
+          "enum": ["USER", "SERVICE", "SYSTEM"]
+        },
+        "id": {
+          "$ref": "#/$defs/opaqueId"
+        }
+      }
+    },
+    "data": {
+      "type": "object"
+    },
+    "trace": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["traceparent"],
+      "properties": {
+        "traceparent": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "tracestate": {
+          "type": "string",
+          "maxLength": 512
+        }
+      }
+    }
+  },
+  "$defs": {
+    "opaqueId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 180
+    }
+  }
+}
