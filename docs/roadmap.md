@@ -7,9 +7,9 @@ This roadmap controls implementation order. A phase starts only after its entry 
 | Stage    | Outcome                            | Status      |
 | -------- | ---------------------------------- | ----------- |
 | Phase 0A | Repository skeleton                | Complete    |
-| Phase 0B | Contract and platform discovery    | Next        |
+| Phase 0B | Contract and platform discovery    | In progress |
 | Phase 1  | Reliable engine foundation         | Not started |
-| Phase 2  | Direct-upload vertical slice       | Not started |
+| Phase 2  | Direct-upload proof and demo       | Not started |
 | Phase 3  | Existing DevPortal compatibility   | Not started |
 | Phase 4  | SharePoint entry and destination   | Not started |
 | Phase 5  | Templates and review               | Not started |
@@ -40,7 +40,15 @@ Explicitly not delivered:
 
 ## Phase 0B: contract and platform discovery
 
+Status: in progress.
+
 Purpose: remove implementation ambiguity before building the reliability foundation.
+
+Progress:
+
+- DevPortal compatibility discovery baseline: [`contracts/devportal-compatibility.md`](contracts/devportal-compatibility.md).
+- Direct canonical API v1 and workflow-definition envelope: [`contracts/canonical-api-v1.md`](contracts/canonical-api-v1.md).
+- Authentication, tenancy, permission, and project-authorization contract: [`contracts/auth-tenancy.md`](contracts/auth-tenancy.md).
 
 Required decisions:
 
@@ -97,9 +105,9 @@ Exit criteria:
 - S3 contract tests prove streaming, checksum validation, immutable keys, and deletion behavior.
 - Tenant isolation tests cover every repository and public API query.
 
-## Phase 2: direct-upload vertical slice
+## Phase 2: direct-upload proof with internal demo harness
 
-Purpose: deliver one complete workflow without n8n or review.
+Purpose: deliver and demonstrate one complete workflow without n8n, review, or changes to the real DevPortal.
 
 Scope:
 
@@ -112,6 +120,11 @@ Scope:
 - Map extracted fields into the canonical destination command.
 - Deliver to one confirmed Dynamics NAV/Business Central action.
 - Expose execution status and failure details through canonical APIs.
+- Build a disposable internal demo UI under `tools/demo-ui` that calls only the canonical public API.
+- Mirror the existing DevPortal journey boundaries: workflow list, three-step create/activate wizard, upload, execution status, failure details, and retry.
+- Generate or share the same typed API client and workflow-definition schema that the real DevPortal migration will consume.
+- Mock only external provider boundaries when needed; do not mock PostgreSQL state, RabbitMQ delivery, S3 staging, idempotency, or engine recovery behavior.
+- Exclude the demo UI from the production engine image and production deployment manifests.
 
 Exit criteria:
 
@@ -121,16 +134,21 @@ Exit criteria:
 - API/worker termination tests recover the execution at every stage.
 - Provider outage, throttling, timeout, and uncertain-write scenarios are tested.
 - An API-only operator can inspect, retry, and audit the execution.
+- The internal demo UI proves the DevPortal-shaped journey against the real engine APIs without database, queue, or worker backdoors.
+- Canonical request/response fixtures from the demo are frozen for the Phase 3 DevPortal client migration.
+- The real `devportal` and `devportal-backend` repositories remain unchanged throughout Phase 2.
 
 ## Phase 3: existing DevPortal compatibility and provisioning
 
 Purpose: make the new engine fit the current UI rather than rebuilding the frontend.
 
+Entry gate: Phase 2 has passed its engine reliability, end-to-end demo, and canonical-contract exit criteria. The real DevPortal is not modified before this gate.
+
 Scope:
 
 - Keep existing DevPortal project/workflow navigation, three-step wizard, workflow table, upload/demo, and review journeys.
-- Keep `devportal-backend` as the compatibility/BFF layer.
-- Translate legacy frontend contracts into canonical engine resources.
+- Update the existing DevPortal workflow service to call AiFlow Engine directly through the platform API gateway.
+- Submit and consume canonical engine resources; legacy v1/v2 payloads are migration inputs only.
 - Replace only Google/n8n-specific Step Two controls with connector configuration.
 - Add direct browser-to-S3 upload to the existing demo/upload flow.
 - Show engine execution status, error details, and safe retry in existing UI areas.
@@ -141,7 +159,7 @@ Exit criteria:
 
 - A user can create and activate the Phase 2 workflow using the existing three-step DevPortal flow.
 - Existing routes, Redux organization, and general visual structure remain intact.
-- Compatibility mappings are covered by contract tests using captured legacy payloads.
+- Canonical UI/API contracts and legacy migration mappings are covered by separate contract tests.
 - No n8n workflow, user, credential, tag, or database record is created for a new workflow.
 - Legacy compatibility names do not appear in engine-core entities.
 

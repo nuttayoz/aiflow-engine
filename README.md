@@ -2,7 +2,7 @@
 
 AiFlow Engine is the single replacement repository for the n8n-based AiFlow runtime services. This repository currently contains only a compileable and testable project skeleton.
 
-The existing DevPortal frontend is not part of this repository and will not be rebuilt. `devportal-backend` remains the initial compatibility layer between the current UI contracts and this engine's future canonical APIs.
+The existing DevPortal frontend is not part of this repository and will not be rebuilt. Its AiFlow screens will call this engine's canonical APIs directly. `devportal-backend` remains responsible for its existing non-AiFlow features and temporary legacy traffic, but it is not part of the new AiFlow runtime path.
 
 ## Runtime roles
 
@@ -65,10 +65,39 @@ packages/
   templates/
   connectors/
 docs/
+  architecture/
+    principles.md
+  contracts/
+    auth-tenancy.md
+    canonical-api-v1.md
+    devportal-compatibility.md
+    schemas/
+      workflow-definition.v1.schema.json
+  decisions/
+    0000-template.md
+    README.md
   roadmap.md
 ```
 
 Infrastructure and domain packages are deliberately empty boundaries. PostgreSQL, RabbitMQ, S3, connector behavior, workflow state transitions, and DevPortal compatibility endpoints will be implemented phase by phase.
+
+Implementation sequencing is defined in [`docs/roadmap.md`](docs/roadmap.md). Phase 0B contracts currently include the [`canonical API v1`](docs/contracts/canonical-api-v1.md) and [`DevPortal compatibility discovery`](docs/contracts/devportal-compatibility.md).
+
+## Repository policy
+
+The repository rules are intentionally split by purpose:
+
+- [`CONTRIBUTING.md`](CONTRIBUTING.md) is the team workflow, coding, testing, commit, review, and definition-of-done guide.
+- [`AGENTS.md`](AGENTS.md) governs automated coding agents working in this repository.
+- [`SECURITY.md`](SECURITY.md) defines confidential-data handling, authentication/tenancy expectations, and private vulnerability reporting.
+- [`docs/architecture/principles.md`](docs/architecture/principles.md) contains the durable architecture laws.
+- [`docs/decisions/`](docs/decisions/) contains the ADR process and template for important choices.
+
+Commit messages and squash-merge PR titles follow Conventional Commits. Validate a message with:
+
+```bash
+bun run commitlint --edit .git/COMMIT_EDITMSG
+```
 
 ## Scope guard
 
