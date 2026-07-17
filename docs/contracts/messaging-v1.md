@@ -12,6 +12,8 @@ A worker must load authoritative state from PostgreSQL and win an atomic state/l
 
 The outbox/inbox records, claim transactions, leases, indexes, and retention rules are defined in [`postgresql-v1.md`](postgresql-v1.md).
 
+External OCR uses the existing extract/reconciliation commands plus one provider-copy deletion command as defined by [`ocr-v1.md`](ocr-v1.md).
+
 Delivery is at least once. Publisher confirms and consumer acknowledgements reduce message loss but do not remove duplicate-delivery cases, so handlers must be idempotent. This matches RabbitMQ's [reliability guidance](https://www.rabbitmq.com/docs/reliability).
 
 ## Envelope
@@ -69,6 +71,7 @@ The envelope schema validates common metadata. Each message type has a separate 
 | `aiflow.document.ingest.connector.<connector-id>.requested.v1`         | `ingestionId`, `connectorId`, `expectedStateVersion`                   | Claim provider-entry ingestion before `DOCUMENT_STAGED` |
 | `aiflow.storage.object.delete.requested.v1`                            | `storageObjectId`, `expectedStateVersion`                              | Permanently delete one eligible exact object version    |
 | `aiflow.storage.object.reconcile.requested.v1`                         | `storageObjectId`, `expectedStateVersion`                              | Reconcile PostgreSQL metadata with one exact object     |
+| `aiflow.extraction.provider-copy.delete.requested.v1`                  | `extractionRequestId`, `expectedStateVersion`                          | Delete/confirm one supported provider-side OCR copy     |
 
 Messages carry only lookup identifiers and concurrency guards. Workers load workflow configuration, connection references, object keys, retry policy, and provider state through tenant-scoped repositories.
 
@@ -93,6 +96,7 @@ The command routing key is the message `type` without the leading `aiflow.`. For
 | Queue pattern                                  | Binding key                                                     | Scaling boundary                    |
 | ---------------------------------------------- | --------------------------------------------------------------- | ----------------------------------- |
 | `aiflow.q.stage.extract.v1`                    | `execution.stage.extract.requested.v1`                          | Extraction workers                  |
+| `aiflow.q.stage.extract.v1`                    | `extraction.provider-copy.delete.requested.v1`                  | Provider-copy cleanup               |
 | `aiflow.q.stage.map.v1`                        | `execution.stage.map.requested.v1`                              | Mapping workers                     |
 | `aiflow.q.stage.review.v1`                     | `execution.stage.review.requested.v1`                           | Review-adapter workers              |
 | `aiflow.q.stage.reconcile.v1`                  | `execution.stage.reconcile.requested.v1`                        | Reconciliation workers              |

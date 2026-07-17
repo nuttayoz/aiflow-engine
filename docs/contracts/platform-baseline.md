@@ -108,6 +108,17 @@ The Phase 0B bucket baseline, storage-object model, keys, checksums, upload/inge
 - Keep connector credentials behind references to the approved secret owner; never store them in workflow definitions or messages.
 - Authenticate callbacks/webhooks independently and bind their tenant to persisted connection/task ownership.
 
+### External OCR
+
+- Keep OCR vendors behind the provider-neutral extraction port and immutable extraction-profile versions.
+- Require idempotent submission or lookup by an engine request key, independent status/result reconciliation, and documented terminal states.
+- Treat callbacks as authenticated notification hints; durable PostgreSQL state plus provider inspection decides progress.
+- Stream the exact source object version to the provider and store only a normalized canonical extraction artifact in S3.
+- Bound account/tenant/profile concurrency separately from Kubernetes scaling and persist throttling/retry due times.
+- Track provider retention/deletion independently from engine S3 retention; do not claim provider data was deleted without evidence.
+
+The Phase 0B provider capabilities, durable request/callback model, reconciliation, normalized artifact, quota, security, retention, and test boundary are defined in [`ocr-v1.md`](ocr-v1.md).
+
 ### Kubernetes and operations
 
 - Scale API, worker queue groups, and scheduler independently from the same image.
@@ -155,8 +166,12 @@ Production measurements must replace assumptions about document size, pages, pro
 | `AUTH-01`    | Auth team         | JWT versus opaque token; issuer/discovery/JWKS, audience, algorithms and token lifetime                     | Authentication guard     |
 | `AUTH-02`    | Auth/Product      | Exact actor, tenant, role/scope, token-ID and service-identity claims; multi-tenant selection               | Tenant context           |
 | `AUTH-03`    | Auth/Platform     | Project authorization contract, service authentication, timeout and revocation behavior                     | Resource authorization   |
+| `OCR-01`     | Product/Platform  | Provider/product/API version, Regions, endpoints, authentication, sandbox, and support owner                | OCR adapter              |
+| `OCR-02`     | Provider/Platform | Submission idempotency/correlation, operation status/result, terminal states, and callback contract         | OCR reliability          |
+| `OCR-03`     | Provider/Security | Quotas/limits/latency, retention/deletion, residency, subprocessors, training terms, and DPA                | OCR production approval  |
 | `OPS-01`     | Platform          | Existing CI template, deployment values convention, secret manager, Sentry/metrics/trace endpoints          | Production delivery      |
 | `PRODUCT-01` | Product/Security  | File/page limits, types, malware controls, retention, availability, throughput, RPO and RTO targets         | Contract freeze          |
+| `PRODUCT-02` | Product           | Initial extraction profiles, immutable output schemas/paths, confidence/review rules, and result limit      | OCR profile freeze       |
 
 ## Phase decision
 

@@ -302,7 +302,7 @@ Upload-session creation accepts only file metadata such as name, content type, s
 
 The storage-object boundary, upload plans, exact S3 verification, expiry, idempotent completion, and deletion behavior are defined in [`storage-v1.md`](storage-v1.md).
 
-The provider-neutral states, attempts, transition guards, failure categories, and manual-retry behavior are defined in [`execution-lifecycle.md`](execution-lifecycle.md).
+The provider-neutral states, attempts, transition guards, failure categories, and manual-retry behavior are defined in [`execution-lifecycle.md`](execution-lifecycle.md). Extraction profiles, immutable output schemas, and external OCR behavior are defined in [`ocr-v1.md`](ocr-v1.md).
 
 ## Review endpoints
 
@@ -423,7 +423,7 @@ The migration records source identifiers for audit and endpoint redirection, but
 2. Dynamics NAV versus Business Central version, destination actions, and connector schemas.
 3. SharePoint subscription, resource-selection, delta, and permission schemas.
 4. Existing Review System adapter and artifact ownership.
-5. Extraction provider/profile catalog ownership and exact field-schema format.
+5. Confirm the provider and initial profile/schema values required by [`ocr-v1.md`](ocr-v1.md).
 6. Workflow activation and provisioning state transition table.
 7. Product/platform confirmation of the proposed file size, multipart threshold, checksum algorithm/type, upload expiry, and retention in [`storage-v1.md`](storage-v1.md).
 8. Cursor format, default/max page size, and retention visibility.
