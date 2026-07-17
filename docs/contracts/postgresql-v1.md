@@ -49,7 +49,7 @@ The package named below owns the business meaning and repository contract. Physi
 | `messaging`   | `outbox_messages`, `inbox_messages`                                                                    | Atomic publication intent and logical-consumer deduplication                                      |
 | `database`    | `scheduler_leases`, `typeorm_migrations`                                                               | Global job leadership and schema history                                                          |
 
-Future phases add provider-neutral tables only when their feature arrives, for example upload sessions/parts, ingestions, managed connector-provisioning bindings, and review tasks. Provider-specific fields remain inside validated connector configuration or connector-owned records; they do not become columns on `executions`.
+Future phases add tables only when their feature arrives. Phase 4 adds provider-neutral `document_ingestions` and `connector_provisioning_bindings`, plus adapter-owned SharePoint watch, item-inventory, and notification-event records defined by [`sharepoint-entry-v1.md`](sharepoint-entry-v1.md). Review tasks arrive in Phase 5. Provider-specific fields remain inside validated connector configuration or connector-owned records; they do not become columns on `executions`.
 
 The extraction and delivery-operation tables are Phase 2 additions. Their ownership is fixed here so provider contracts are unambiguous; Phase 1 does not create unused provider tables.
 
