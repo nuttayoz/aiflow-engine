@@ -14,6 +14,8 @@ entry connector -> DOCUMENT_STAGED -> EXTRACT -> MAP -> optional REVIEW -> DELIV
 
 Entry discovery, download, checksum verification, and storage staging are ingestion responsibilities. They are not execution stages. Adding an entry or destination provider must not change the core lifecycle.
 
+Direct upload, provider streaming, derived artifacts, and the `AVAILABLE` storage boundary are defined in [`storage-v1.md`](storage-v1.md).
+
 PostgreSQL is authoritative for every transition. RabbitMQ messages only wake workers so they can load and claim eligible work.
 
 ## Core resources

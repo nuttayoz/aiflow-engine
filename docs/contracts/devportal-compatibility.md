@@ -295,6 +295,8 @@ The localized replacement flow is:
 5. AiFlow Engine durably creates one document/execution and returns `executionId`.
 6. The existing page shows state, failure details, and safe retry by querying the execution.
 
+The engine selects the self-describing single-part or multipart plan. DevPortal follows that plan without generating bucket names, object keys, KMS settings, or alternative validation rules. Exact behavior is defined in [`storage-v1.md`](storage-v1.md).
+
 The DevPortal demo call is therefore an intentional localized contract change. Compatibility for external callers of the existing public `endpoint_url` is a separate discovery item; those callers cannot be inferred from the frontend repository.
 
 SharePoint entries do not pass through DevPortal or `devportal-backend` after provisioning. Notifications enter the engine connector, a worker streams the object from Microsoft Graph into S3, and processing joins the same staged-document boundary as direct upload.

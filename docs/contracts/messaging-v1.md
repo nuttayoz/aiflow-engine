@@ -67,6 +67,8 @@ The envelope schema validates common metadata. Each message type has a separate 
 | `aiflow.execution.stage.deliver.connector.<connector-id>.requested.v1` | `executionId`, `stage: DELIVER`, `connectorId`, `expectedStateVersion` | Claim destination-specific delivery                     |
 | `aiflow.execution.stage.reconcile.requested.v1`                        | `executionId`, `stage`, `expectedStateVersion`                         | Reconcile a persisted wait or unknown outcome           |
 | `aiflow.document.ingest.connector.<connector-id>.requested.v1`         | `ingestionId`, `connectorId`, `expectedStateVersion`                   | Claim provider-entry ingestion before `DOCUMENT_STAGED` |
+| `aiflow.storage.object.delete.requested.v1`                            | `storageObjectId`, `expectedStateVersion`                              | Permanently delete one eligible exact object version    |
+| `aiflow.storage.object.reconcile.requested.v1`                         | `storageObjectId`, `expectedStateVersion`                              | Reconcile PostgreSQL metadata with one exact object     |
 
 Messages carry only lookup identifiers and concurrency guards. Workers load workflow configuration, connection references, object keys, retry policy, and provider state through tenant-scoped repositories.
 
@@ -96,6 +98,7 @@ The command routing key is the message `type` without the leading `aiflow.`. For
 | `aiflow.q.stage.reconcile.v1`                  | `execution.stage.reconcile.requested.v1`                        | Reconciliation workers              |
 | `aiflow.q.connector.<connector-id>.ingest.v1`  | `document.ingest.connector.<connector-id>.requested.v1`         | One installed entry connector       |
 | `aiflow.q.connector.<connector-id>.deliver.v1` | `execution.stage.deliver.connector.<connector-id>.requested.v1` | One installed destination connector |
+| `aiflow.q.storage.lifecycle.v1`                | `storage.object.*.requested.v1`                                 | Storage reconciliation and deletion |
 
 Each source queue has an inspectable dead-letter queue named `aiflow.dlq.<source-name>.v1`, bound to `aiflow.dlx.v1` by the source queue name.
 

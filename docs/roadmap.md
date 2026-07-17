@@ -53,12 +53,13 @@ Progress:
 - Provider-neutral execution lifecycle, guarded transitions, attempts, retries, waits, leases, and recovery: [`contracts/execution-lifecycle.md`](contracts/execution-lifecycle.md).
 - RabbitMQ v1 envelope, bounded topology, delivery semantics, retry separation, and DLQ handling: [`contracts/messaging-v1.md`](contracts/messaging-v1.md).
 - PostgreSQL v1 ownership, logical records, tenancy constraints, concurrency, migrations, connection budget, retention, and recovery: [`contracts/postgresql-v1.md`](contracts/postgresql-v1.md).
+- Object storage v1 bucket controls, storage-object model, direct/provider transfer, integrity, exact-version lifecycle, retention, and test boundary: [`contracts/storage-v1.md`](contracts/storage-v1.md).
 
 Required decisions:
 
 1. Confirm PostgreSQL 18.4 availability, connection budget, migration process, backup/PITR guarantees, RPO, and RTO.
 2. Confirm RabbitMQ 4.3.2 availability, cluster topology, quorum queue support, TLS/authentication, virtual-host convention, and KEDA availability.
-3. S3 bucket, KMS key, lifecycle, private connectivity, EKS identity, and maximum-object conventions.
+3. Confirm the bucket, KMS, IAM, CORS, lifecycle, private-connectivity, and product values proposed by [`contracts/storage-v1.md`](contracts/storage-v1.md).
 4. Authentication token validation plus canonical tenant, actor, role, and service-identity claims.
 5. Third-party OCR request/callback contract, authentication, quotas, timeout, retry, idempotency, and reconciliation capability.
 6. Exact Dynamics NAV or Business Central product/version, hosting model, authentication, companies, entities, and required writes.
@@ -73,6 +74,7 @@ Deliverables:
 - Initial execution states and transition table: [`contracts/execution-lifecycle.md`](contracts/execution-lifecycle.md).
 - Initial RabbitMQ exchange/queue/message naming proposal: [`contracts/messaging-v1.md`](contracts/messaging-v1.md).
 - Initial PostgreSQL ownership and migration proposal: [`contracts/postgresql-v1.md`](contracts/postgresql-v1.md).
+- Initial Amazon S3 ownership, transfer, integrity, retention, and local-development proposal: [`contracts/storage-v1.md`](contracts/storage-v1.md).
 - Compatibility inventory for the existing DevPortal and `devportal-backend`.
 
 Exit criteria:

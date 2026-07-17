@@ -41,13 +41,14 @@ The package named below owns the business meaning and repository contract. Physi
 | ------------- | -------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
 | `workflows`   | `workflows`, `workflow_versions`, `workflow_version_connection_refs` | Stable workflow identity, immutable definitions, activation, and relational connection references |
 | `connections` | `connections`                                                        | Tenant-owned safe provider configuration and external secret reference                            |
-| `documents`   | `documents`                                                          | Immutable staged-object metadata, source identity, checksum, and retention/deletion state         |
+| `storage`     | `storage_objects`                                                    | Provider-neutral object location, exact version, checksum, status, retention, and deletion intent |
+| `documents`   | `documents`                                                          | Immutable source identity and accepted source-storage reference                                   |
 | `executions`  | `executions`, `execution_stages`, `stage_attempts`                   | Provider-neutral lifecycle, guarded current state, waits, retries, leases, and attempt history    |
 | `core`        | `idempotency_records`, `audit_events`                                | Boundary idempotency and append-only audit facts shared by use cases                              |
 | `messaging`   | `outbox_messages`, `inbox_messages`                                  | Atomic publication intent and logical-consumer deduplication                                      |
 | `database`    | `scheduler_leases`, `typeorm_migrations`                             | Global job leadership and schema history                                                          |
 
-Future phases add provider-neutral tables only when their feature arrives, for example upload sessions, ingestions, connector subscriptions, review tasks, and artifact metadata. Provider-specific fields remain inside validated connector configuration or connector-owned records; they do not become columns on `executions`.
+Future phases add provider-neutral tables only when their feature arrives, for example upload sessions/parts, ingestions, connector subscriptions, review tasks, and execution-artifact references. Provider-specific fields remain inside validated connector configuration or connector-owned records; they do not become columns on `executions`.
 
 No module writes another module's table directly. A cross-module change is performed by an application use case inside one transaction through the owning repository adapters.
 
@@ -59,9 +60,12 @@ workflows
        -> workflow_version_connection_refs -> connections
 
 documents
+  -> storage_objects (source bytes)
   -> executions
        -> execution_stages
             -> stage_attempts
+
+future execution_artifacts -> storage_objects (derived bytes)
 
 accepted transaction -> outbox_messages -> RabbitMQ
 RabbitMQ delivery -> inbox_messages + durable stage claim
@@ -104,7 +108,7 @@ PostgreSQL never stores:
 - authorization headers, end-user JWTs, or presigned URLs;
 - unredacted provider request/response bodies.
 
-The database may store immutable S3 keys, checksums, sizes, schema versions, safe provider operation references, and external secret-manager references. These values remain confidential and are not automatically exposed through APIs or messages.
+The database may store immutable S3 keys/version IDs, checksums, sizes, schema versions, safe provider operation references, and external secret-manager references. Domain records use provider-neutral storage-object IDs; adapter location fields remain confidential and are not automatically exposed through APIs or messages. Exact object behavior is defined by the [storage contract](storage-v1.md).
 
 ## Initial table invariants
 
@@ -139,15 +143,17 @@ Rules:
 
 ### Documents
 
-`documents` stores staged-object identity and metadata: tenant/project, source connector and source identity, immutable object key, SHA-256 checksum, size, content type, original safe filename, staging time, and retention/deletion state.
+`storage_objects` stores the physical location alias, immutable object key and exact version, verified size/content type/checksum/encryption projection, lifecycle status, retention time, and deletion intent. It is owned by the storage module and defined by [`storage-v1.md`](storage-v1.md).
+
+`documents` stores accepted document identity and metadata: tenant/project, source connector and source identity, source `storage_object_id`, S3-verified checksum/size snapshot, optional full-content SHA-256 plus verification state, original safe filename, and staging time.
 
 Rules:
 
 - The row is created only after object existence, size, and checksum are verified.
-- Object identity, checksum, and staged metadata are immutable after acceptance.
+- Source storage-object identity, checksum, and staged metadata are immutable after acceptance.
 - Direct-upload idempotency and provider source identity prevent duplicate document creation.
 - Source-specific version/eTag values live in bounded source metadata or a later ingestion record, not in execution columns.
-- Deletion is a durable state transition. The row is not removed until S3 deletion is confirmed or the approved tombstone period expires.
+- Storage deletion is a durable transition on `storage_objects`. The document row remains a tombstone/audit reference until its approved metadata retention expires.
 
 ### Executions, stages, and attempts
 
