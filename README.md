@@ -78,6 +78,7 @@ docs/
     platform-baseline.md
     postgresql-v1.md
     storage-v1.md
+    workflow-provisioning-v1.md
     schemas/
       message-envelope.v1.schema.json
       extraction-result.v1.schema.json
@@ -91,7 +92,7 @@ docs/
 
 Infrastructure and domain packages are deliberately empty boundaries. PostgreSQL, RabbitMQ, S3, connector behavior, workflow state transitions, and DevPortal compatibility endpoints will be implemented phase by phase.
 
-Implementation sequencing is defined in [`docs/roadmap.md`](docs/roadmap.md). Phase 0B contracts currently include the [`canonical API v1`](docs/contracts/canonical-api-v1.md), [`execution lifecycle`](docs/contracts/execution-lifecycle.md), [`RabbitMQ messaging v1`](docs/contracts/messaging-v1.md), [`PostgreSQL persistence v1`](docs/contracts/postgresql-v1.md), [`object storage v1`](docs/contracts/storage-v1.md), [`external OCR v1`](docs/contracts/ocr-v1.md), [`Microsoft Dynamics destination v1`](docs/contracts/dynamics-destination-v1.md), [`DevPortal compatibility discovery`](docs/contracts/devportal-compatibility.md), and [`platform baseline`](docs/contracts/platform-baseline.md).
+Implementation sequencing is defined in [`docs/roadmap.md`](docs/roadmap.md). Phase 0B contracts currently include the [`canonical API v1`](docs/contracts/canonical-api-v1.md), [`workflow provisioning v1`](docs/contracts/workflow-provisioning-v1.md), [`execution lifecycle`](docs/contracts/execution-lifecycle.md), [`RabbitMQ messaging v1`](docs/contracts/messaging-v1.md), [`PostgreSQL persistence v1`](docs/contracts/postgresql-v1.md), [`object storage v1`](docs/contracts/storage-v1.md), [`external OCR v1`](docs/contracts/ocr-v1.md), [`Microsoft Dynamics destination v1`](docs/contracts/dynamics-destination-v1.md), [`DevPortal compatibility discovery`](docs/contracts/devportal-compatibility.md), and [`platform baseline`](docs/contracts/platform-baseline.md).
 
 ## Repository policy
 

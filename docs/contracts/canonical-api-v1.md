@@ -55,17 +55,18 @@ The normalized security model is defined in [`auth-tenancy.md`](auth-tenancy.md)
 
 ## Resource vocabulary
 
-| Resource              | Responsibility                                                                                      |
-| --------------------- | --------------------------------------------------------------------------------------------------- |
-| `Workflow`            | Stable identity, project ownership, display metadata, lifecycle, and active version                 |
-| `WorkflowVersion`     | Immutable validated workflow definition                                                             |
-| `ConnectorDescriptor` | Entry/destination capabilities, display metadata, connection requirements, and configuration schema |
-| `Connection`          | Tenant-scoped reference to an authorized external system; secret material is never returned         |
-| `ExtractionProfile`   | Available extraction provider capability and output-field schema                                    |
-| `UploadSession`       | Authorized direct-to-S3 upload plan and completion boundary                                         |
-| `Document`            | Immutable staged object metadata and source identity                                                |
-| `Execution`           | One durable end-to-end run through the workflow state machine                                       |
-| `ReviewTask`          | Human review state attached to an execution                                                         |
+| Resource                | Responsibility                                                                                      |
+| ----------------------- | --------------------------------------------------------------------------------------------------- |
+| `Workflow`              | Stable identity, project ownership, display metadata, lifecycle, and active version                 |
+| `WorkflowVersion`       | Immutable validated workflow definition                                                             |
+| `ProvisioningOperation` | Durable activation/deactivation progress and safe recovery state                                    |
+| `ConnectorDescriptor`   | Entry/destination capabilities, display metadata, connection requirements, and configuration schema |
+| `Connection`            | Tenant-scoped reference to an authorized external system; secret material is never returned         |
+| `ExtractionProfile`     | Available extraction provider capability and output-field schema                                    |
+| `UploadSession`         | Authorized direct-to-S3 upload plan and completion boundary                                         |
+| `Document`              | Immutable staged object metadata and source identity                                                |
+| `Execution`             | One durable end-to-end run through the workflow state machine                                       |
+| `ReviewTask`            | Human review state attached to an execution                                                         |
 
 ## Workflow definition schema
 
@@ -151,8 +152,10 @@ Adding this connector requires a new descriptor, implementation, and contract te
 | `POST /api/v1/workflows/:workflowId/versions`           | Create a new immutable draft version                           |
 | `GET /api/v1/workflows/:workflowId/versions`            | List workflow versions                                         |
 | `GET /api/v1/workflows/:workflowId/versions/:versionId` | Get one immutable version                                      |
+| `GET /api/v1/workflows/:workflowId/activation`          | Get active version, intake gate, operation, and health         |
 | `PUT /api/v1/workflows/:workflowId/activation`          | Activate a selected version, provisioning connectors as needed |
 | `DELETE /api/v1/workflows/:workflowId/activation`       | Stop new entry while retaining history                         |
+| `GET /api/v1/provisioning-operations/:operationId`      | Poll one activation/deactivation operation                     |
 
 ### Create workflow
 
@@ -210,8 +213,15 @@ HTTP/1.1 201 Created
     "id": "workflow-id",
     "projectId": "31",
     "name": "Invoice intake",
-    "status": "DRAFT",
+    "status": "INACTIVE",
     "activeVersionId": null,
+    "activation": {
+      "acceptingNewDocuments": false,
+      "targetVersionId": null,
+      "operation": null,
+      "cleanupRequired": false,
+      "health": "UNKNOWN"
+    },
     "latestVersion": {
       "id": "version-id",
       "versionNumber": 1,
@@ -264,15 +274,15 @@ Idempotency-Key: activate-invoice-intake-version-2
 }
 ```
 
-Activation returns `200 OK` when no asynchronous provisioning is required and `202 Accepted` when connector resources such as SharePoint subscriptions must be provisioned. In the asynchronous case the response includes an operation identifier and the workflow reports `PROVISIONING` until it becomes `ACTIVE` or `PROVISIONING_FAILED`.
+A newly accepted activation returns a durable provisioning operation with `202 Accepted`; an already achieved clean activation may return `200 OK`. The current active version remains available while a replacement is prepared, and the pointer switches only after target validation/provisioning succeeds.
 
-Deactivation is idempotent. It stops new entry and subscription intake but does not cancel already accepted executions.
+Deactivation is idempotent. It closes local intake immediately, cleans managed connector resources asynchronously when required, and does not cancel already accepted executions. Exact API responses, operation states, connector modes, version cutover, and recovery follow [`workflow-provisioning-v1.md`](workflow-provisioning-v1.md).
 
 ## Catalog and connection endpoints
 
 | Method and path                                                 | Purpose                                                                     |
 | --------------------------------------------------------------- | --------------------------------------------------------------------------- |
-| `GET /api/v1/connectors`                                        | List descriptors, filterable by `capability=entry                           | destination` |
+| `GET /api/v1/connectors`                                        | List descriptors, filterable by entry or destination capability             |
 | `GET /api/v1/connectors/:connectorId`                           | Get descriptor, actions, connection requirements, and configuration schemas |
 | `GET /api/v1/extraction-profiles`                               | List extraction profiles available to the project/tenant                    |
 | `GET /api/v1/extraction-profiles/:profileId`                    | Get profile metadata and output-field schema                                |
@@ -302,7 +312,7 @@ Upload-session creation accepts only file metadata such as name, content type, s
 
 The storage-object boundary, upload plans, exact S3 verification, expiry, idempotent completion, and deletion behavior are defined in [`storage-v1.md`](storage-v1.md).
 
-The provider-neutral states, attempts, transition guards, failure categories, and manual-retry behavior are defined in [`execution-lifecycle.md`](execution-lifecycle.md). Extraction profiles, immutable output schemas, and external OCR behavior are defined in [`ocr-v1.md`](ocr-v1.md). Microsoft destination connections/actions, stable effect identity, and receipts are defined in [`dynamics-destination-v1.md`](dynamics-destination-v1.md).
+The provider-neutral states, attempts, transition guards, failure categories, and manual-retry behavior are defined in [`execution-lifecycle.md`](execution-lifecycle.md). Workflow activation, provisioning, version cutover, and deactivation are defined in [`workflow-provisioning-v1.md`](workflow-provisioning-v1.md). Extraction profiles, immutable output schemas, and external OCR behavior are defined in [`ocr-v1.md`](ocr-v1.md). Microsoft destination connections/actions, stable effect identity, and receipts are defined in [`dynamics-destination-v1.md`](dynamics-destination-v1.md).
 
 ## Review endpoints
 
@@ -424,7 +434,7 @@ The migration records source identifiers for audit and endpoint redirection, but
 3. SharePoint subscription, resource-selection, delta, and permission schemas.
 4. Existing Review System adapter and artifact ownership.
 5. Confirm the provider and initial profile/schema values required by [`ocr-v1.md`](ocr-v1.md).
-6. Workflow activation and provisioning state transition table.
+6. Confirm the product/platform values required by [`workflow-provisioning-v1.md`](workflow-provisioning-v1.md).
 7. Product/platform confirmation of the proposed file size, multipart threshold, checksum algorithm/type, upload expiry, and retention in [`storage-v1.md`](storage-v1.md).
 8. Cursor format, default/max page size, and retention visibility.
 9. Whether workflow deletion is archive-only or supports later hard deletion.
