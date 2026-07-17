@@ -18,6 +18,8 @@ Direct upload, provider streaming, derived artifacts, and the `AVAILABLE` storag
 
 External extraction submission, callback hints, polling, reconciliation, and canonical result acceptance are defined in [`ocr-v1.md`](ocr-v1.md).
 
+Microsoft destination effect identity, delivery operations, bounded receipts, and unknown-outcome reconciliation are defined in [`dynamics-destination-v1.md`](dynamics-destination-v1.md).
+
 PostgreSQL is authoritative for every transition. RabbitMQ messages only wake workers so they can load and claim eligible work.
 
 ## Core resources
@@ -137,7 +139,7 @@ Rules:
 - An execution may have only one direct retry child. A failed child is retried to extend the chain; retry branches are forbidden.
 - Only one non-terminal execution may exist in a root retry chain.
 - The API exposes an allowed retry action only when recovery is safe.
-- A stable destination effect key is derived from the root execution and destination action so manual retry cannot create a second business effect.
+- A random opaque destination effect key is created once, stored against the root execution and destination action, and reused so manual retry cannot create a second business effect.
 
 ## Failure contract
 

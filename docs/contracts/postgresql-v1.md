@@ -37,21 +37,21 @@ The runtime application identity can read and write approved `aiflow` tables but
 
 The package named below owns the business meaning and repository contract. Physical TypeORM code remains in the database adapter so domain packages do not import TypeORM.
 
-| Logical owner | Initial tables                                                       | Purpose                                                                                           |
-| ------------- | -------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
-| `workflows`   | `workflows`, `workflow_versions`, `workflow_version_connection_refs` | Stable workflow identity, immutable definitions, activation, and relational connection references |
-| `connections` | `connections`                                                        | Tenant-owned safe provider configuration and external secret reference                            |
-| `storage`     | `storage_objects`                                                    | Provider-neutral object location, exact version, checksum, status, retention, and deletion intent |
-| `documents`   | `documents`                                                          | Immutable source identity and accepted source-storage reference                                   |
-| `executions`  | `executions`, `execution_stages`, `stage_attempts`                   | Provider-neutral lifecycle, guarded current state, waits, retries, leases, and attempt history    |
-| `extraction`  | `extraction_requests`, `extraction_callback_events`                  | External extraction operation, reconciliation, callback deduplication, and provider cleanup       |
-| `core`        | `idempotency_records`, `audit_events`                                | Boundary idempotency and append-only audit facts shared by use cases                              |
-| `messaging`   | `outbox_messages`, `inbox_messages`                                  | Atomic publication intent and logical-consumer deduplication                                      |
-| `database`    | `scheduler_leases`, `typeorm_migrations`                             | Global job leadership and schema history                                                          |
+| Logical owner | Initial tables                                                            | Purpose                                                                                           |
+| ------------- | ------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| `workflows`   | `workflows`, `workflow_versions`, `workflow_version_connection_refs`      | Stable workflow identity, immutable definitions, activation, and relational connection references |
+| `connections` | `connections`                                                             | Tenant-owned safe provider configuration and external secret reference                            |
+| `storage`     | `storage_objects`                                                         | Provider-neutral object location, exact version, checksum, status, retention, and deletion intent |
+| `documents`   | `documents`                                                               | Immutable source identity and accepted source-storage reference                                   |
+| `executions`  | `executions`, `execution_stages`, `stage_attempts`, `delivery_operations` | Provider-neutral lifecycle, attempts, waits, outputs, destination effects, and receipts           |
+| `extraction`  | `extraction_requests`, `extraction_callback_events`                       | External extraction operation, reconciliation, callback deduplication, and provider cleanup       |
+| `core`        | `idempotency_records`, `audit_events`                                     | Boundary idempotency and append-only audit facts shared by use cases                              |
+| `messaging`   | `outbox_messages`, `inbox_messages`                                       | Atomic publication intent and logical-consumer deduplication                                      |
+| `database`    | `scheduler_leases`, `typeorm_migrations`                                  | Global job leadership and schema history                                                          |
 
 Future phases add provider-neutral tables only when their feature arrives, for example upload sessions/parts, ingestions, connector subscriptions, and review tasks. Provider-specific fields remain inside validated connector configuration or connector-owned records; they do not become columns on `executions`.
 
-The extraction tables are Phase 2 additions. Their ownership is fixed here so the OCR contract is unambiguous; Phase 1 does not create unused provider tables.
+The extraction and delivery-operation tables are Phase 2 additions. Their ownership is fixed here so provider contracts are unambiguous; Phase 1 does not create unused provider tables.
 
 No module writes another module's table directly. A cross-module change is performed by an application use case inside one transaction through the owning repository adapters.
 
@@ -69,6 +69,8 @@ documents
             -> stage_attempts -> storage_objects (optional canonical stage output)
                  -> extraction_requests (for EXTRACT)
                       -> extraction_callback_events
+
+root execution/retry chain -> delivery_operations -> current DELIVER stage_attempt
 
 accepted transaction -> outbox_messages -> RabbitMQ
 RabbitMQ delivery -> inbox_messages + durable stage claim
@@ -192,6 +194,21 @@ Rules:
 - Request state changes, reconciliation/deletion outbox intent, and safe audit facts commit atomically.
 - Provider calls, result transfer, and callback authentication do not occur inside a database transaction.
 - Exact behavior and retention/deletion responsibilities follow [`ocr-v1.md`](ocr-v1.md).
+
+### Delivery operations
+
+`delivery_operations` stores one provider-neutral destination effect for a root retry chain and immutable connector/action version: connection/company references, random effect key, exact input storage-object/schema and payload hash, guarded status, current execution/attempt, reconciliation due/deadline, bounded external resource receipt, and safe failure projection.
+
+Rules:
+
+- `(tenant_id, root_execution_id, connector_id, action_id, action_version)` is unique.
+- `effect_key` is globally unique, opaque, generated before first publication, and never accepted from a caller/mapping/message.
+- Automatic and manual retry attempts reuse the same operation/effect key and exact payload hash.
+- Same effect key with a different payload hash is a permanent integrity conflict.
+- Provider calls occur outside transactions; operation/stage/attempt/outbox/audit transitions commit atomically around them.
+- An unknown outcome permits only reconciliation until authoritative provider evidence says the effect was or was not applied.
+- Receipt fields are bounded identifiers/version/timing only; mapped values and raw provider responses are excluded.
+- Exact behavior follows [`dynamics-destination-v1.md`](dynamics-destination-v1.md).
 
 ### Idempotency records
 
@@ -364,6 +381,7 @@ These initial values inherit the proposed engineering envelope and require produ
 | Execution stages and attempts    | Same lifetime as their execution                                    |
 | Extraction requests              | Same lifetime as their execution; provider copies follow OCR policy |
 | Extraction callback events       | 90 days and never shorter than provider callback replay policy      |
+| Delivery operations/receipts     | Same lifetime as root execution; longer only by financial policy    |
 | Audit events                     | 1 year                                                              |
 | Idempotency records              | 90 days and never shorter than the accepted external replay window  |
 | Inbox records                    | 90 days and never shorter than broker/DLQ replay policy             |

@@ -55,6 +55,7 @@ Progress:
 - PostgreSQL v1 ownership, logical records, tenancy constraints, concurrency, migrations, connection budget, retention, and recovery: [`contracts/postgresql-v1.md`](contracts/postgresql-v1.md).
 - Object storage v1 bucket controls, storage-object model, direct/provider transfer, integrity, exact-version lifecycle, retention, and test boundary: [`contracts/storage-v1.md`](contracts/storage-v1.md).
 - External OCR v1 provider capabilities, durable requests, authenticated callback hints, reconciliation, canonical result artifact, quotas, and deletion boundary: [`contracts/ocr-v1.md`](contracts/ocr-v1.md).
+- Microsoft Dynamics destination v1 product separation, connection/action descriptors, stable effect identity, receipt, unknown-outcome reconciliation, and Business Central draft recommendation: [`contracts/dynamics-destination-v1.md`](contracts/dynamics-destination-v1.md).
 
 Required decisions:
 
@@ -63,7 +64,7 @@ Required decisions:
 3. Confirm the bucket, KMS, IAM, CORS, lifecycle, private-connectivity, and product values proposed by [`contracts/storage-v1.md`](contracts/storage-v1.md).
 4. Authentication token validation plus canonical tenant, actor, role, and service-identity claims.
 5. Confirm the provider/product values and capabilities required by [`contracts/ocr-v1.md`](contracts/ocr-v1.md).
-6. Exact Dynamics NAV or Business Central product/version, hosting model, authentication, companies, entities, and required writes.
+6. Confirm the product, action, endpoint, authentication, effect extension, and schema values required by [`contracts/dynamics-destination-v1.md`](contracts/dynamics-destination-v1.md).
 7. Existing Review System ownership and callback contract.
 8. Existing DevPortal endpoints, request/response shapes, and workflow payloads that the compatibility layer must preserve.
 9. Initial retention, file-size, page-count, throughput, availability, and latency targets.
@@ -77,6 +78,7 @@ Deliverables:
 - Initial PostgreSQL ownership and migration proposal: [`contracts/postgresql-v1.md`](contracts/postgresql-v1.md).
 - Initial Amazon S3 ownership, transfer, integrity, retention, and local-development proposal: [`contracts/storage-v1.md`](contracts/storage-v1.md).
 - Initial external OCR request, callback, reconciliation, canonical artifact, quota, and deletion proposal: [`contracts/ocr-v1.md`](contracts/ocr-v1.md).
+- Initial Microsoft Dynamics destination connection, action, effective-once write, receipt, and reconciliation proposal: [`contracts/dynamics-destination-v1.md`](contracts/dynamics-destination-v1.md).
 - Compatibility inventory for the existing DevPortal and `devportal-backend`.
 
 Exit criteria:

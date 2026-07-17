@@ -95,7 +95,7 @@ The stable definition envelope contains five processing concerns:
   "destination": {
     "connectorId": "microsoft-business-central",
     "connectionId": "connection-id",
-    "actionId": "create-purchase-invoice",
+    "actionId": "create-purchase-invoice-draft",
     "config": {
       "companyId": "company-id"
     }
@@ -189,7 +189,7 @@ Content-Type: application/json
     "destination": {
       "connectorId": "microsoft-business-central",
       "connectionId": "connection-id",
-      "actionId": "create-purchase-invoice",
+      "actionId": "create-purchase-invoice-draft",
       "config": {
         "companyId": "company-id"
       }
@@ -302,7 +302,7 @@ Upload-session creation accepts only file metadata such as name, content type, s
 
 The storage-object boundary, upload plans, exact S3 verification, expiry, idempotent completion, and deletion behavior are defined in [`storage-v1.md`](storage-v1.md).
 
-The provider-neutral states, attempts, transition guards, failure categories, and manual-retry behavior are defined in [`execution-lifecycle.md`](execution-lifecycle.md). Extraction profiles, immutable output schemas, and external OCR behavior are defined in [`ocr-v1.md`](ocr-v1.md).
+The provider-neutral states, attempts, transition guards, failure categories, and manual-retry behavior are defined in [`execution-lifecycle.md`](execution-lifecycle.md). Extraction profiles, immutable output schemas, and external OCR behavior are defined in [`ocr-v1.md`](ocr-v1.md). Microsoft destination connections/actions, stable effect identity, and receipts are defined in [`dynamics-destination-v1.md`](dynamics-destination-v1.md).
 
 ## Review endpoints
 
@@ -420,7 +420,7 @@ The migration records source identifiers for audit and endpoint redirection, but
 ## Open items before implementation freeze
 
 1. Supply the platform values required by [`auth-tenancy.md`](auth-tenancy.md): claims, issuer/audience/JWKS, permission mapping, and project-authorization service contract.
-2. Dynamics NAV versus Business Central version, destination actions, and connector schemas.
+2. Confirm the Microsoft product/action/connection/schema values required by [`dynamics-destination-v1.md`](dynamics-destination-v1.md).
 3. SharePoint subscription, resource-selection, delta, and permission schemas.
 4. Existing Review System adapter and artifact ownership.
 5. Confirm the provider and initial profile/schema values required by [`ocr-v1.md`](ocr-v1.md).
