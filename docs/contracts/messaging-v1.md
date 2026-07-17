@@ -73,6 +73,7 @@ The envelope schema validates common metadata. Each message type has a separate 
 | `aiflow.execution.stage.deliver.connector.<connector-id>.requested.v1` | `executionId`, `stage: DELIVER`, `connectorId`, `expectedStateVersion` | Claim destination-specific delivery                     |
 | `aiflow.execution.stage.reconcile.requested.v1`                        | `executionId`, `stage`, `expectedStateVersion`                         | Reconcile a persisted wait or unknown outcome           |
 | `aiflow.document.ingest.connector.<connector-id>.requested.v1`         | `ingestionId`, `connectorId`, `expectedStateVersion`                   | Claim provider-entry ingestion before `DOCUMENT_STAGED` |
+| `aiflow.connector.microsoft-sharepoint.watch.reconcile.requested.v1`   | `watchId`, `expectedStateVersion`, `expectedNotificationGeneration`    | Reconcile SharePoint delta/subscription/watch health    |
 | `aiflow.storage.object.delete.requested.v1`                            | `storageObjectId`, `expectedStateVersion`                              | Permanently delete one eligible exact object version    |
 | `aiflow.storage.object.reconcile.requested.v1`                         | `storageObjectId`, `expectedStateVersion`                              | Reconcile PostgreSQL metadata with one exact object     |
 | `aiflow.extraction.provider-copy.delete.requested.v1`                  | `extractionRequestId`, `expectedStateVersion`                          | Delete/confirm one supported provider-side OCR copy     |
@@ -98,17 +99,18 @@ The command routing key is the message `type` without the leading `aiflow.`. For
 
 ### Queues and bindings
 
-| Queue pattern                                  | Binding key                                                     | Scaling boundary                    |
-| ---------------------------------------------- | --------------------------------------------------------------- | ----------------------------------- |
-| `aiflow.q.stage.extract.v1`                    | `execution.stage.extract.requested.v1`                          | Extraction workers                  |
-| `aiflow.q.stage.extract.v1`                    | `extraction.provider-copy.delete.requested.v1`                  | Provider-copy cleanup               |
-| `aiflow.q.stage.map.v1`                        | `execution.stage.map.requested.v1`                              | Mapping workers                     |
-| `aiflow.q.stage.review.v1`                     | `execution.stage.review.requested.v1`                           | Review-adapter workers              |
-| `aiflow.q.stage.reconcile.v1`                  | `execution.stage.reconcile.requested.v1`                        | Reconciliation workers              |
-| `aiflow.q.connector.<connector-id>.ingest.v1`  | `document.ingest.connector.<connector-id>.requested.v1`         | One installed entry connector       |
-| `aiflow.q.connector.<connector-id>.deliver.v1` | `execution.stage.deliver.connector.<connector-id>.requested.v1` | One installed destination connector |
-| `aiflow.q.storage.lifecycle.v1`                | `storage.object.*.requested.v1`                                 | Storage reconciliation and deletion |
-| `aiflow.q.workflow.provisioning.v1`            | `workflow.provisioning.requested.v1`                            | Workflow activation/cleanup workers |
+| Queue pattern                                     | Binding key                                                     | Scaling boundary                    |
+| ------------------------------------------------- | --------------------------------------------------------------- | ----------------------------------- |
+| `aiflow.q.stage.extract.v1`                       | `execution.stage.extract.requested.v1`                          | Extraction workers                  |
+| `aiflow.q.stage.extract.v1`                       | `extraction.provider-copy.delete.requested.v1`                  | Provider-copy cleanup               |
+| `aiflow.q.stage.map.v1`                           | `execution.stage.map.requested.v1`                              | Mapping workers                     |
+| `aiflow.q.stage.review.v1`                        | `execution.stage.review.requested.v1`                           | Review-adapter workers              |
+| `aiflow.q.stage.reconcile.v1`                     | `execution.stage.reconcile.requested.v1`                        | Reconciliation workers              |
+| `aiflow.q.connector.<connector-id>.ingest.v1`     | `document.ingest.connector.<connector-id>.requested.v1`         | One installed entry connector       |
+| `aiflow.q.connector.microsoft-sharepoint.sync.v1` | `connector.microsoft-sharepoint.watch.reconcile.requested.v1`   | SharePoint metadata/watch workers   |
+| `aiflow.q.connector.<connector-id>.deliver.v1`    | `execution.stage.deliver.connector.<connector-id>.requested.v1` | One installed destination connector |
+| `aiflow.q.storage.lifecycle.v1`                   | `storage.object.*.requested.v1`                                 | Storage reconciliation and deletion |
+| `aiflow.q.workflow.provisioning.v1`               | `workflow.provisioning.requested.v1`                            | Workflow activation/cleanup workers |
 
 Each source queue has an inspectable dead-letter queue named `aiflow.dlq.<source-name>.v1`, bound to `aiflow.dlx.v1` by the source queue name.
 

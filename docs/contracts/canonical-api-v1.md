@@ -123,7 +123,7 @@ The Microsoft connector can replace only the entry binding:
 }
 ```
 
-These Microsoft fields are illustrative until the Graph product/version and subscription contracts are confirmed. They live inside the connector schema, so they do not change the workflow-definition envelope.
+These Microsoft fields are the SharePoint entry v1 configuration defined by [`sharepoint-entry-v1.md`](sharepoint-entry-v1.md). They live inside the connector schema, so they do not change the workflow-definition envelope.
 
 ### Future Google entry example
 

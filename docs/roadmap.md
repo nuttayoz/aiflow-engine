@@ -57,6 +57,7 @@ Progress:
 - External OCR v1 provider capabilities, durable requests, authenticated callback hints, reconciliation, canonical result artifact, quotas, and deletion boundary: [`contracts/ocr-v1.md`](contracts/ocr-v1.md).
 - Microsoft Dynamics destination v1 product separation, connection/action descriptors, stable effect identity, receipt, unknown-outcome reconciliation, and Business Central draft recommendation: [`contracts/dynamics-destination-v1.md`](contracts/dynamics-destination-v1.md).
 - Workflow provisioning v1 activation API, operation lifecycle, connector capability modes, atomic version replacement, deactivation, and recovery: [`contracts/workflow-provisioning-v1.md`](contracts/workflow-provisioning-v1.md).
+- Microsoft SharePoint entry v1 connection/permission boundary, shared drive watch, callback, delta inventory, Graph-to-S3 ingestion, renewal, handover, and scaling: [`contracts/sharepoint-entry-v1.md`](contracts/sharepoint-entry-v1.md).
 
 Required decisions:
 
@@ -67,9 +68,10 @@ Required decisions:
 5. Confirm the provider/product values and capabilities required by [`contracts/ocr-v1.md`](contracts/ocr-v1.md).
 6. Confirm the product, action, endpoint, authentication, effect extension, and schema values required by [`contracts/dynamics-destination-v1.md`](contracts/dynamics-destination-v1.md).
 7. Confirm the operation UX, limits, connector-version support, cleanup, and archive values required by [`contracts/workflow-provisioning-v1.md`](contracts/workflow-provisioning-v1.md).
-8. Existing Review System ownership and callback contract.
-9. Existing DevPortal endpoints, request/response shapes, and workflow payloads that the compatibility layer must preserve.
-10. Initial retention, file-size, page-count, throughput, availability, and latency targets.
+8. Confirm the identity/permission, product limits, callback/network, timing, retention, and UX values required by [`contracts/sharepoint-entry-v1.md`](contracts/sharepoint-entry-v1.md).
+9. Existing Review System ownership and callback contract.
+10. Existing DevPortal endpoints, request/response shapes, and workflow payloads that the compatibility layer must preserve.
+11. Initial retention, file-size, page-count, throughput, availability, and latency targets.
 
 Deliverables:
 
@@ -82,6 +84,7 @@ Deliverables:
 - Initial external OCR request, callback, reconciliation, canonical artifact, quota, and deletion proposal: [`contracts/ocr-v1.md`](contracts/ocr-v1.md).
 - Initial Microsoft Dynamics destination connection, action, effective-once write, receipt, and reconciliation proposal: [`contracts/dynamics-destination-v1.md`](contracts/dynamics-destination-v1.md).
 - Initial n8n-free workflow activation, connector provisioning, version cutover, deactivation, and recovery proposal: [`contracts/workflow-provisioning-v1.md`](contracts/workflow-provisioning-v1.md).
+- Initial SharePoint Online connection, subscription, callback, delta, ingestion, renewal, recovery, and scaling proposal: [`contracts/sharepoint-entry-v1.md`](contracts/sharepoint-entry-v1.md).
 - Compatibility inventory for the existing DevPortal and `devportal-backend`.
 
 Exit criteria:
@@ -180,6 +183,8 @@ Exit criteria:
 ## Phase 4: SharePoint entry and destination
 
 Purpose: support automatic document entry from Microsoft while converging on the same `DOCUMENT_STAGED` boundary.
+
+Contract: [`contracts/sharepoint-entry-v1.md`](contracts/sharepoint-entry-v1.md).
 
 Scope:
 

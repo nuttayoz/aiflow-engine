@@ -50,11 +50,11 @@ The canonical definition and endpoints are defined by [`canonical-api-v1.md`](ca
 
 Each connector descriptor declares one activation behavior for each supported entry or destination capability version:
 
-| Mode            | Meaning                                                                    | Initial example                      |
-| --------------- | -------------------------------------------------------------------------- | ------------------------------------ |
-| `NONE`          | Schema/catalog checks only; no live provider resource                      | `direct-upload` entry                |
-| `VALIDATE_ONLY` | Bounded live authorization/resource/capability checks; no provider write   | Business Central draft destination   |
-| `MANAGED`       | Create, reconcile, renew, and remove a workflow-specific provider resource | Future SharePoint subscription entry |
+| Mode            | Meaning                                                                                | Initial example                    |
+| --------------- | -------------------------------------------------------------------------------------- | ---------------------------------- |
+| `NONE`          | Schema/catalog checks only; no live provider resource                                  | `direct-upload` entry              |
+| `VALIDATE_ONLY` | Bounded live authorization/resource/capability checks; no provider write               | Business Central draft destination |
+| `MANAGED`       | Create, share where allowed, reconcile, renew, and remove a required provider resource | SharePoint subscription entry      |
 
 The descriptor also publishes:
 
@@ -70,6 +70,8 @@ The descriptor also publishes:
 Adding Google Drive or another future entry provider adds a descriptor and adapter that satisfies this contract. It does not add a new workflow lifecycle or public activation payload.
 
 `MANAGED` is not permission to execute arbitrary connector code or user URLs. Only installed, allow-listed connector modules may contribute provisioning behavior.
+
+A managed adapter may share one reference-owned external watch when the provider forbids duplicates or sharing materially improves bounded scale. Sharing requires an exact connector-defined key, remains inside one engine tenant and connection, and never merges authorization or lifecycle across tenants/connections. Workflow-specific bindings still control eligibility, version handover, scope, and audit. The first such rule is the SharePoint `(tenantId, connectionId, driveId)` watch defined by [`sharepoint-entry-v1.md`](sharepoint-entry-v1.md).
 
 ## Resource discovery and selection
 
@@ -264,7 +266,7 @@ Phase 1/2 do not create this unused binding table for `NONE`/`VALIDATE_ONLY` con
 
 When replacing an active version, steps 2-5 leave the old active pointer and intake unchanged. A target validation/provisioning failure cleans or reconciles partial target resources and leaves the old version active.
 
-Entry connectors must define a no-loss handover rule before supporting version replacement. Notifications from retired bindings cannot create new executions after cutover; any provider event gap must be recovered by the connector's authoritative cursor/delta/reconciliation contract. Exact SharePoint semantics remain Phase 4 work.
+Entry connectors must define a no-loss handover rule before supporting version replacement. Notifications from retired bindings cannot create new executions after cutover. A connector may use a bounded explicit `DRAINING` binding only when its provider cursor contract requires one post-cutover barrier; it is not a second active version and must end by a durable deadline. Any provider event gap is recovered by the connector's authoritative cursor/delta/reconciliation contract. Exact SharePoint semantics are defined by [`sharepoint-entry-v1.md`](sharepoint-entry-v1.md).
 
 ## Deactivation and cleanup flow
 
@@ -364,4 +366,4 @@ Alerts cover stuck operations, reconciliation deadline, unresolved provider effe
 - `PROV-04`: confirm workflow archive/hard-delete policy and retained provisioning/audit history.
 - `PROV-05`: for every `MANAGED` connector, prove provisioning-key uniqueness, authoritative lookup, renewal, removal, unknown-outcome recovery, and no-loss version handover.
 
-SharePoint resource, subscription, callback, delta, permission, renewal, and handover details remain a Phase 4 provider contract. They refine the managed adapter without changing this provider-neutral activation API or lifecycle.
+SharePoint resource, subscription, callback, delta, permission, renewal, and handover details are defined by [`sharepoint-entry-v1.md`](sharepoint-entry-v1.md). They refine the managed adapter without changing this provider-neutral activation API or lifecycle.
