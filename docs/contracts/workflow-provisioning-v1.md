@@ -98,7 +98,7 @@ Creating a version validates without provider writes:
 1. definition envelope and connector-owned schemas;
 2. tenant/project ownership and referenced connection ownership;
 3. installed connector, action, extraction-profile, and schema versions;
-4. mapping source/target paths and required review policy;
+4. mapping source/target paths and the bounded review policy defined by [`review-v1.md`](review-v1.md);
 5. bounded values and forbidden secret/URL fields;
 6. the relational connection-reference projection and definition hash.
 
@@ -115,7 +115,8 @@ Activation reauthorizes the project and every referenced connection, then verifi
 5. selected companies/sites/drives/folders/resources still exist and are accessible;
 6. required permissions, custom endpoints/extensions, quotas, and provider capabilities are present;
 7. `MANAGED` connectors can satisfy their effect, lookup, renewal, cleanup, and handover contract;
-8. there is no unresolved earlier provisioning effect or cleanup that makes another activation unsafe.
+8. a review-required version has an installed production-eligible presentation adapter and compatible content limits;
+9. there is no unresolved earlier provisioning effect or cleanup that makes another activation unsafe.
 
 Live checks run outside database transactions with bounded timeouts and concurrency. A transient check failure follows the durable retry policy; a deterministic configuration or permission failure ends the operation with a safe code.
 

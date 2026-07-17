@@ -22,6 +22,8 @@ External extraction submission, callback hints, polling, reconciliation, and can
 
 Microsoft destination effect identity, delivery operations, bounded receipts, and unknown-outcome reconciliation are defined in [`dynamics-destination-v1.md`](dynamics-destination-v1.md).
 
+Review task creation, presentation, authenticated decisions, revised artifacts, expiry, and provider cleanup are defined in [`review-v1.md`](review-v1.md).
+
 PostgreSQL is authoritative for every transition. RabbitMQ messages only wake workers so they can load and claim eligible work.
 
 ## Core resources
@@ -96,20 +98,20 @@ Attempt status is limited to `RUNNING`, `SUCCEEDED`, `FAILED`, or `TIMED_OUT`. A
 
 Every transition and its outgoing outbox record are committed in one PostgreSQL transaction.
 
-| From              | Trigger and guard                                               | To                   | Durable effect                                                     |
-| ----------------- | --------------------------------------------------------------- | -------------------- | ------------------------------------------------------------------ |
-| no execution      | Document is staged and the idempotency key is new               | `QUEUED`             | Create execution and extraction outbox command                     |
-| `QUEUED`          | Extraction command matches `stateVersion`; lease claim succeeds | `EXTRACTING`         | Start extraction attempt                                           |
-| `EXTRACTING`      | Extraction output is valid and committed                        | `MAPPING`            | Complete extraction; create mapping command                        |
-| `EXTRACTING`      | Provider accepted asynchronous work                             | `EXTRACTING`         | Mark stage `WAITING`; release lease and persist extraction request |
-| `MAPPING`         | Mapping succeeds and review is required                         | `AWAITING_REVIEW`    | Commit immutable mapped output; create review request command      |
-| `MAPPING`         | Mapping succeeds and review is not required                     | `DELIVERING`         | Skip review; create delivery command                               |
-| `AWAITING_REVIEW` | Authenticated decision is approved and new                      | `DELIVERING`         | Commit decision; create delivery command                           |
-| `AWAITING_REVIEW` | Authenticated decision is rejected and new                      | `REJECTED`           | Commit decision and terminal audit event                           |
-| `AWAITING_REVIEW` | Review policy expires                                           | `FAILED`             | Record non-retryable policy failure                                |
-| `DELIVERING`      | Destination effect is confirmed                                 | `SUCCEEDED`          | Commit destination receipt and terminal audit event                |
-| active state      | Transient stage failure remains within policy                   | same execution state | Finish attempt; mark `RETRY_SCHEDULED` with `nextAttemptAt`        |
-| active state      | Permanent failure or retry budget exhausted                     | `FAILED`             | Finish attempt and record allowed recovery actions                 |
+| From              | Trigger and guard                                               | To                   | Durable effect                                                        |
+| ----------------- | --------------------------------------------------------------- | -------------------- | --------------------------------------------------------------------- |
+| no execution      | Document is staged and the idempotency key is new               | `QUEUED`             | Create execution and extraction outbox command                        |
+| `QUEUED`          | Extraction command matches `stateVersion`; lease claim succeeds | `EXTRACTING`         | Start extraction attempt                                              |
+| `EXTRACTING`      | Extraction output is valid and committed                        | `MAPPING`            | Complete extraction; create mapping command                           |
+| `EXTRACTING`      | Provider accepted asynchronous work                             | `EXTRACTING`         | Mark stage `WAITING`; release lease and persist extraction request    |
+| `MAPPING`         | Mapping succeeds and review is required                         | `AWAITING_REVIEW`    | Commit mapped output, unique review task, retention, and command      |
+| `MAPPING`         | Mapping succeeds and review is not required                     | `DELIVERING`         | Skip review; create delivery command                                  |
+| `AWAITING_REVIEW` | Authenticated decision is approved and new                      | `DELIVERING`         | Commit exact input/task decision, delivery effect, and command        |
+| `AWAITING_REVIEW` | Authenticated decision is rejected and new                      | `REJECTED`           | Commit task decision, cleanup intent, and terminal audit event        |
+| `AWAITING_REVIEW` | Review policy expires                                           | `FAILED`             | Commit expired task, cleanup intent, and non-retryable policy failure |
+| `DELIVERING`      | Destination effect is confirmed                                 | `SUCCEEDED`          | Commit destination receipt and terminal audit event                   |
+| active state      | Transient stage failure remains within policy                   | same execution state | Finish attempt; mark `RETRY_SCHEDULED` with `nextAttemptAt`           |
+| active state      | Permanent failure or retry budget exhausted                     | `FAILED`             | Finish attempt and record allowed recovery actions                    |
 
 Duplicate, stale, or out-of-order triggers do not transition state. They are recorded as already handled where useful and acknowledged safely.
 
@@ -142,6 +144,8 @@ Rules:
 - Only one non-terminal execution may exist in a root retry chain.
 - The API exposes an allowed retry action only when recovery is safe.
 - A random opaque destination effect key is created once, stored against the root execution and destination action, and reused so manual retry cannot create a second business effect.
+- A delivery-stage retry after approval reuses the exact immutable review-approved input and does not request human approval again.
+- A review preparation failure or expiry creates a new task only through an allowed child execution retry; a terminal review task is never reopened. A rejected execution has no v1 retry action.
 
 ## Failure contract
 

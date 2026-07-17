@@ -201,9 +201,11 @@ The current `app-user` role may map to an agreed user permission set, but engine
 
 ### Review tasks
 
-- User review decisions require bearer authentication plus task/project permission.
-- Public review links, if retained through the existing Review System, use a separate expiring one-time capability validated by the review adapter.
+- Review list, metadata, content, source-preview access, and decisions require bearer authentication plus exact task/project permission.
+- Source-preview capabilities are issued only after task authorization and are exact-version, short-lived, read-only, and never decision authority.
+- Public review links, if retained through the existing Review System, use a separate expiring one-time presentation capability validated by the review adapter.
 - Neither a URL query value nor `x-aiflow-review-approved` selects tenant or authorizes an engine transition.
+- Exact decision, provider-presentation, callback, and DevPortal behavior follows [`review-v1.md`](review-v1.md).
 
 ## Asynchronous identity propagation
 
@@ -232,7 +234,7 @@ Callback authentication is defined by each integration contract:
 
 - OCR callbacks authenticate with the provider's signed JWT/HMAC/mTLS mechanism and correlate to a stored provider request as defined by [`ocr-v1.md`](ocr-v1.md).
 - SharePoint notifications validate Microsoft subscription/client-state semantics and derive tenant/project from the stored subscription.
-- Review callbacks validate the Review System's signed/one-time capability and stored review task.
+- Review callbacks, if enabled, validate the Review System's confirmed signed JWT/HMAC/mTLS or one-time exchange contract and correlate to the stored review task; token syntax or a requester string is insufficient.
 - Service-to-service administrative APIs use a dedicated workload/service token with narrow audience and permissions.
 
 A callback body/header may contain a tenant or project hint for correlation, but the engine derives authority from its stored connection/subscription/request record.

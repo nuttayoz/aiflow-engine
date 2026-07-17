@@ -110,13 +110,34 @@
       "type": "object",
       "additionalProperties": false,
       "required": ["required"],
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "required": {
+                "const": true
+              }
+            },
+            "required": ["required"]
+          },
+          "then": {
+            "required": ["expiresAfterSeconds"]
+          },
+          "else": {
+            "not": {
+              "required": ["expiresAfterSeconds"]
+            }
+          }
+        }
+      ],
       "properties": {
         "required": {
           "type": "boolean"
         },
         "expiresAfterSeconds": {
           "type": "integer",
-          "minimum": 60
+          "minimum": 60,
+          "maximum": 2592000
         }
       }
     },
