@@ -288,16 +288,19 @@ Connection responses never expose refresh tokens, client secrets, encrypted prov
 
 ## Upload and execution endpoints
 
-| Method and path                                          | Purpose                                                               |
-| -------------------------------------------------------- | --------------------------------------------------------------------- |
-| `POST /api/v1/workflows/:workflowId/upload-sessions`     | Authorize an upload and return a short-lived S3 plan                  |
-| `POST /api/v1/upload-sessions/:uploadSessionId/complete` | Verify uploaded object metadata and durably create document/execution |
-| `DELETE /api/v1/upload-sessions/:uploadSessionId`        | Abort an incomplete upload session                                    |
-| `GET /api/v1/workflows/:workflowId/executions`           | List workflow executions with filters/pagination                      |
-| `GET /api/v1/executions/:executionId`                    | Get state, stage summary, failure, and audit-safe metadata            |
-| `POST /api/v1/executions/:executionId/retries`           | Request a guarded retry from an allowed failed state                  |
+| Method and path                                                                       | Purpose                                                               |
+| ------------------------------------------------------------------------------------- | --------------------------------------------------------------------- |
+| `POST /api/v1/workflows/:workflowId/upload-sessions`                                  | Authorize an upload and return a short-lived S3 plan                  |
+| `POST /api/v1/upload-sessions/:uploadSessionId/parts/:partNumber/upload-capabilities` | Issue/refresh one checksum-bound multipart capability                 |
+| `POST /api/v1/upload-sessions/:uploadSessionId/complete`                              | Verify uploaded object metadata and durably create document/execution |
+| `DELETE /api/v1/upload-sessions/:uploadSessionId`                                     | Abort an incomplete upload session                                    |
+| `GET /api/v1/workflows/:workflowId/executions`                                        | List workflow executions with filters/pagination                      |
+| `GET /api/v1/executions/:executionId`                                                 | Get state, stage summary, failure, and audit-safe metadata            |
+| `POST /api/v1/executions/:executionId/retries`                                        | Request a guarded retry from an allowed failed state                  |
 
-Upload-session creation accepts only file metadata such as name, content type, size, checksum, and multipart preference. Completion returns an `executionId`; background processing never holds the upload HTTP request open.
+Upload-session creation accepts only file metadata such as name, content type, size, and checksum. The server selects and returns a self-describing single-part or multipart plan; client input cannot weaken validation. Completion returns an `executionId`; background processing never holds the upload HTTP request open.
+
+The storage-object boundary, upload plans, exact S3 verification, expiry, idempotent completion, and deletion behavior are defined in [`storage-v1.md`](storage-v1.md).
 
 The provider-neutral states, attempts, transition guards, failure categories, and manual-retry behavior are defined in [`execution-lifecycle.md`](execution-lifecycle.md).
 
@@ -422,7 +425,7 @@ The migration records source identifiers for audit and endpoint redirection, but
 4. Existing Review System adapter and artifact ownership.
 5. Extraction provider/profile catalog ownership and exact field-schema format.
 6. Workflow activation and provisioning state transition table.
-7. Maximum request metadata, file size, multipart threshold, checksum algorithm, and upload expiry.
+7. Product/platform confirmation of the proposed file size, multipart threshold, checksum algorithm/type, upload expiry, and retention in [`storage-v1.md`](storage-v1.md).
 8. Cursor format, default/max page size, and retention visibility.
 9. Whether workflow deletion is archive-only or supports later hard deletion.
 

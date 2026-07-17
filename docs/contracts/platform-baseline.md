@@ -92,11 +92,13 @@ The Phase 0B envelope, bounded topology, acknowledgement boundary, business-retr
 ### Amazon S3
 
 - Use a private bucket per environment or the platform-approved equivalent isolation.
-- Use SSE-KMS, block public access, TLS, immutable tenant-scoped object keys, and SHA-256 checksum metadata.
+- Use SSE-KMS, block public access, TLS, immutable tenant-scoped versioned object keys, and S3-validated SHA-256 metadata with explicit full/composite checksum type.
 - Use EKS Pod Identity or IRSA. Static AWS access keys are forbidden.
 - Use direct presigned uploads for API entry and worker streaming for SharePoint/provider entry.
 - Keep presigned URLs short-lived and operation-specific; never persist or log them.
 - Record deletion intent and retention in PostgreSQL; use S3 lifecycle as a safety net.
+
+The Phase 0B bucket baseline, storage-object model, keys, checksums, upload/ingestion flows, exact-version reads/deletes, IAM, reconciliation, retention, and local/AWS test boundary are defined in [`storage-v1.md`](storage-v1.md).
 
 ### Authentication and tenancy
 
@@ -136,23 +138,26 @@ Production measurements must replace assumptions about document size, pages, pro
 
 ## Required platform confirmations
 
-| ID           | Owner             | Confirmation required                                                                              | Blocks                   |
-| ------------ | ----------------- | -------------------------------------------------------------------------------------------------- | ------------------------ |
-| `PG-01`      | Platform/DBA      | Confirm PostgreSQL 18.4 availability and supported extensions/features                             | Migration implementation |
-| `PG-02`      | Platform/DBA      | Total engine connection budget and proxy/pooler convention                                         | Replica and pool sizing  |
-| `PG-03`      | Platform/DBA      | TLS/CA, database/schema ownership, application and migration identities                            | Database connection      |
-| `PG-04`      | Platform/DBA      | Migration execution/approval process, backups/PITR, confirmed RPO/RTO                              | Phase 1 recovery proof   |
-| `RMQ-01`     | Platform          | Confirm RabbitMQ 4.3.2, node/AZ topology, quorum queue and policy support                          | Queue topology           |
-| `RMQ-02`     | Platform          | TLS/CA, authentication, vhost naming, permissions, maximum message and queue policies              | Broker connection        |
-| `RMQ-03`     | Platform          | KEDA availability or approved RabbitMQ-metrics/HPA alternative                                     | Worker autoscaling       |
-| `S3-01`      | Platform/Security | AWS account/region, bucket convention, KMS key, block-public-access and lifecycle policy           | Storage adapter          |
-| `S3-02`      | Platform/Security | EKS Pod Identity versus IRSA, role/service-account convention, private S3 connectivity             | Storage authentication   |
-| `AUTH-01`    | Auth team         | JWT versus opaque token; issuer/discovery/JWKS, audience, algorithms and token lifetime            | Authentication guard     |
-| `AUTH-02`    | Auth/Product      | Exact actor, tenant, role/scope, token-ID and service-identity claims; multi-tenant selection      | Tenant context           |
-| `AUTH-03`    | Auth/Platform     | Project authorization contract, service authentication, timeout and revocation behavior            | Resource authorization   |
-| `OPS-01`     | Platform          | Existing CI template, deployment values convention, secret manager, Sentry/metrics/trace endpoints | Production delivery      |
-| `PRODUCT-01` | Product/Security  | File/page limits, retention, availability, latency, throughput, RPO and RTO targets                | Contract freeze          |
+| ID           | Owner             | Confirmation required                                                                                       | Blocks                   |
+| ------------ | ----------------- | ----------------------------------------------------------------------------------------------------------- | ------------------------ |
+| `PG-01`      | Platform/DBA      | Confirm PostgreSQL 18.4 availability and supported extensions/features                                      | Migration implementation |
+| `PG-02`      | Platform/DBA      | Total engine connection budget and proxy/pooler convention                                                  | Replica and pool sizing  |
+| `PG-03`      | Platform/DBA      | TLS/CA, database/schema ownership, application and migration identities                                     | Database connection      |
+| `PG-04`      | Platform/DBA      | Migration execution/approval process, backups/PITR, confirmed RPO/RTO                                       | Phase 1 recovery proof   |
+| `RMQ-01`     | Platform          | Confirm RabbitMQ 4.3.2, node/AZ topology, quorum queue and policy support                                   | Queue topology           |
+| `RMQ-02`     | Platform          | TLS/CA, authentication, vhost naming, permissions, maximum message and queue policies                       | Broker connection        |
+| `RMQ-03`     | Platform          | KEDA availability or approved RabbitMQ-metrics/HPA alternative                                              | Worker autoscaling       |
+| `S3-01`      | Platform/Security | AWS account/Region, bucket naming/ownership, versioning, Block Public Access, and infrastructure owner      | Storage adapter          |
+| `S3-02`      | Platform/Security | KMS key/alias, key policy, S3 Bucket Key approval, rotation, and recovery behavior                          | Storage encryption       |
+| `S3-03`      | Platform/Security | Pod Identity/IRSA roles, exact IAM/KMS actions including API checksum verification, and VPC/bucket policies | Storage authentication   |
+| `S3-04`      | Platform/Security | Browser origins, regional endpoint, CORS, signature-age cap, and gateway behavior                           | Direct upload            |
+| `S3-05`      | Platform/Security | Lifecycle, noncurrent/delete-marker cleanup, inventory/audit logging, replication, and restore              | Retention and recovery   |
+| `AUTH-01`    | Auth team         | JWT versus opaque token; issuer/discovery/JWKS, audience, algorithms and token lifetime                     | Authentication guard     |
+| `AUTH-02`    | Auth/Product      | Exact actor, tenant, role/scope, token-ID and service-identity claims; multi-tenant selection               | Tenant context           |
+| `AUTH-03`    | Auth/Platform     | Project authorization contract, service authentication, timeout and revocation behavior                     | Resource authorization   |
+| `OPS-01`     | Platform          | Existing CI template, deployment values convention, secret manager, Sentry/metrics/trace endpoints          | Production delivery      |
+| `PRODUCT-01` | Product/Security  | File/page limits, types, malware controls, retention, availability, throughput, RPO and RTO targets         | Contract freeze          |
 
 ## Phase decision
 
-The architecture direction is stable, but platform integration is not implementation-ready until the relevant rows above are confirmed. Phase 0B can continue with provider-independent execution lifecycle and message-envelope contracts; Phase 1 infrastructure code must not guess these values.
+The architecture direction is stable, but platform integration is not implementation-ready until the relevant rows above are confirmed. Phase 0B can continue defining provider-independent contracts; Phase 1 infrastructure code must not guess these values.
