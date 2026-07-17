@@ -4,7 +4,9 @@
   "private": true,
   "main": "dist/main.js",
   "dependencies": {
+    "@aiflow/config": "workspace:*",
     "@aiflow/core": "workspace:*",
+    "@aiflow/observability": "workspace:*",
     "@nestjs/common": "11.1.28",
     "@nestjs/core": "11.1.28",
     "reflect-metadata": "0.2.2",

@@ -1,6 +1,6 @@
 # AiFlow Engine
 
-AiFlow Engine is the single replacement repository for the n8n-based AiFlow runtime services. This repository currently contains only a compileable and testable project skeleton.
+AiFlow Engine is the single replacement repository for the n8n-based AiFlow runtime services. The repository currently contains the compilable project skeleton and the first Phase 1 runtime foundation.
 
 The existing DevPortal frontend is not part of this repository and will not be rebuilt. Its AiFlow screens will call this engine's canonical APIs directly. `devportal-backend` remains responsible for its existing non-AiFlow features and temporary legacy traffic, but it is not part of the new AiFlow runtime path.
 
@@ -33,6 +33,10 @@ bun run build
 bun run start:api
 ```
 
+Runtime configuration comes only from validated environment variables. Copy `.env.example` only for local values and never commit `.env` or real credentials. JSON logs include service, runtime role, environment, event, and request correlation fields while omitting request bodies, query strings, authorization headers, and known secret fields.
+
+The database variables are validated now so the next PostgreSQL slice has a stable input contract. This branch does not connect to PostgreSQL or use migration credentials yet.
+
 Health endpoints:
 
 ```text
@@ -50,6 +54,7 @@ apps/
 packages/
   core/
   config/
+  observability/
   database/
   messaging/
   storage/

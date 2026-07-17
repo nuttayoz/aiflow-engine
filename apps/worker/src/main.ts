@@ -1,27 +1,50 @@
 import 'reflect-metadata';
 
-import { Logger } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 
-import { SERVICE_NAME, waitForTerminationSignal } from '@aiflow/core';
+import { loadRuntimeConfig } from '@aiflow/config';
+import { waitForTerminationSignal } from '@aiflow/core';
+import {
+  createStructuredLogger,
+  NestStructuredLogger,
+  toSafeErrorLog,
+} from '@aiflow/observability';
 
 import { parseQueueSelection } from './queue-selection';
 import { WorkerModule } from './worker.module';
 
+let logger = createStructuredLogger({
+  environment: 'bootstrap',
+  level: 'info',
+  role: 'worker',
+});
+
 const bootstrap = async (): Promise<void> => {
-  const app = await NestFactory.createApplicationContext(WorkerModule);
+  const runtimeConfig = loadRuntimeConfig('worker');
   const queues = parseQueueSelection(process.argv.slice(2));
 
-  app.enableShutdownHooks();
+  logger = createStructuredLogger({
+    environment: runtimeConfig.environment,
+    level: runtimeConfig.logLevel,
+    role: runtimeConfig.role,
+  });
 
-  Logger.log(
-    `Worker skeleton started; queues=${queues.join(',') || 'none'}`,
-    SERVICE_NAME,
-  );
+  const app = await NestFactory.createApplicationContext(WorkerModule, {
+    logger: new NestStructuredLogger(logger),
+  });
+
+  app.enableShutdownHooks();
+  logger.info({ event: 'runtime.started', queues }, 'Worker skeleton started');
 
   const signal = await waitForTerminationSignal();
-  Logger.log(`Worker received ${signal}; shutting down`, SERVICE_NAME);
+  logger.info({ event: 'runtime.stopping', signal }, 'Worker stopping');
   await app.close();
 };
 
-void bootstrap();
+void bootstrap().catch((error: unknown) => {
+  logger.fatal(
+    { event: 'runtime.startup.failed', ...toSafeErrorLog(error) },
+    'Worker failed to start',
+  );
+  process.exitCode = 1;
+});

@@ -1,0 +1,16 @@
+{
+  "name": "@aiflow/observability",
+  "version": "0.1.0",
+  "private": true,
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "dependencies": {
+    "@aiflow/config": "workspace:*",
+    "@aiflow/core": "workspace:*",
+    "@nestjs/common": "11.1.28",
+    "pino": "10.3.1"
+  }
+}

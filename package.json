@@ -12,6 +12,7 @@
     "apps/*",
     "packages/config",
     "packages/core",
+    "packages/observability",
     "packages/database",
     "packages/messaging",
     "packages/storage",
