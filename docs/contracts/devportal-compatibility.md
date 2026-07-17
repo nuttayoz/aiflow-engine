@@ -401,7 +401,7 @@ This inventory does not close Phase 0B. The following items still block later ph
 2. Confirm whether edge infrastructure currently authenticates `/workflow/*` and inventory every non-DevPortal caller.
 3. Export counts and examples of deployed v1, v2, custom, system, active, and review-enabled workflows.
 4. Decide compatibility/redirect requirements for existing public `endpoint_url` callers.
-5. Confirm the extraction catalog and field-schema source after `devportal-backend` no longer owns `ml_field`.
+5. Confirm the extraction catalog/profile values required by [`ocr-v1.md`](ocr-v1.md) after `devportal-backend` no longer owns `ml_field`.
 6. Confirm Review System ownership, approval/rejection callback, token, expiry, and artifact-retention contracts.
 7. Confirm Microsoft Dynamics NAV versus Business Central version, entities, actions, and authentication before finalizing connector schemas.
 8. Confirm connection secret ownership and OAuth callback ingress in the existing platform.

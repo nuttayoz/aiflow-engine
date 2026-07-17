@@ -16,6 +16,8 @@ Entry discovery, download, checksum verification, and storage staging are ingest
 
 Direct upload, provider streaming, derived artifacts, and the `AVAILABLE` storage boundary are defined in [`storage-v1.md`](storage-v1.md).
 
+External extraction submission, callback hints, polling, reconciliation, and canonical result acceptance are defined in [`ocr-v1.md`](ocr-v1.md).
+
 PostgreSQL is authoritative for every transition. RabbitMQ messages only wake workers so they can load and claim eligible work.
 
 ## Core resources
@@ -39,16 +41,17 @@ Conceptual execution fields:
 
 Conceptual stage-attempt fields:
 
-| Field                          | Meaning                                                 |
-| ------------------------------ | ------------------------------------------------------- |
-| `stageAttemptId`               | Opaque attempt identifier                               |
-| `executionId`, `stage`         | Owning run and stage                                    |
-| `attemptNumber`                | Starts at one and increases per stage                   |
-| `status`                       | Durable attempt status                                  |
-| `leaseOwner`, `leaseExpiresAt` | Present only while active work is owned                 |
-| `startedAt`, `finishedAt`      | Attempt timing                                          |
-| `failure`                      | Safe failure details                                    |
-| `providerOperationRef`         | Non-secret reference used for reconciliation, if needed |
+| Field                          | Meaning                                                   |
+| ------------------------------ | --------------------------------------------------------- |
+| `stageAttemptId`               | Opaque attempt identifier                                 |
+| `executionId`, `stage`         | Owning run and stage                                      |
+| `attemptNumber`                | Starts at one and increases per stage                     |
+| `status`                       | Durable attempt status                                    |
+| `leaseOwner`, `leaseExpiresAt` | Present only while active work is owned                   |
+| `startedAt`, `finishedAt`      | Attempt timing                                            |
+| `failure`                      | Safe failure details                                      |
+| `outputStorageObjectId`        | Immutable successful stage output, when the stage has one |
+| `outputSchemaVersion`          | Canonical artifact schema version paired with that output |
 
 These fields establish behavior and auditability. Phase 1 will define physical schemas and indexes separately.
 
@@ -94,7 +97,7 @@ Every transition and its outgoing outbox record are committed in one PostgreSQL 
 | no execution      | Document is staged and the idempotency key is new               | `QUEUED`             | Create execution and extraction outbox command                     |
 | `QUEUED`          | Extraction command matches `stateVersion`; lease claim succeeds | `EXTRACTING`         | Start extraction attempt                                           |
 | `EXTRACTING`      | Extraction output is valid and committed                        | `MAPPING`            | Complete extraction; create mapping command                        |
-| `EXTRACTING`      | Provider accepted asynchronous work                             | `EXTRACTING`         | Mark stage `WAITING`; release lease and persist provider reference |
+| `EXTRACTING`      | Provider accepted asynchronous work                             | `EXTRACTING`         | Mark stage `WAITING`; release lease and persist extraction request |
 | `MAPPING`         | Mapping succeeds and review is required                         | `AWAITING_REVIEW`    | Commit immutable mapped output; create review request command      |
 | `MAPPING`         | Mapping succeeds and review is not required                     | `DELIVERING`         | Skip review; create delivery command                               |
 | `AWAITING_REVIEW` | Authenticated decision is approved and new                      | `DELIVERING`         | Commit decision; create delivery command                           |
@@ -171,7 +174,8 @@ The scheduler finds expired leases and unfinished waits:
 | Interrupted condition                                     | Recovery                                                                               |
 | --------------------------------------------------------- | -------------------------------------------------------------------------------------- |
 | Worker exits before durable claim                         | RabbitMQ can redeliver the command                                                     |
-| Worker exits after durable claim but before provider call | Lease expiry creates a timed-out attempt and schedules a safe retry                    |
+| Worker exits after claim with no durable external request | Lease expiry creates a timed-out attempt and schedules a safe retry                    |
+| Worker exits while external submission outcome is unknown | Reconcile by the stable external request/effect key before any retry                   |
 | Worker exits during an idempotent/read-only provider call | Reconciliation or a policy-controlled retry follows lease expiry                       |
 | Worker exits during a destination write                   | Treat as `UNKNOWN_OUTCOME`; reconcile using the destination effect key before retrying |
 | Callback arrives more than once                           | Inbox/provider-event uniqueness accepts it once                                        |

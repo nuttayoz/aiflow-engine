@@ -1,0 +1,107 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:aiflow-engine:schema:extraction-result:v1",
+  "title": "AiFlow canonical extraction result v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "profile",
+    "source",
+    "pageCount",
+    "data",
+    "confidence",
+    "warnings"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": 1
+    },
+    "profile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["profileId", "profileVersionId"],
+      "properties": {
+        "profileId": {
+          "$ref": "#/$defs/opaqueId"
+        },
+        "profileVersionId": {
+          "$ref": "#/$defs/opaqueId"
+        }
+      }
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contentSha256", "sizeBytes"],
+      "properties": {
+        "contentSha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "sizeBytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 104857600
+        }
+      }
+    },
+    "pageCount": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 500
+    },
+    "data": {
+      "type": "object"
+    },
+    "confidence": {
+      "type": "array",
+      "maxItems": 10000,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "score"],
+        "properties": {
+          "path": {
+            "$ref": "#/$defs/jsonPointer"
+          },
+          "score": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          }
+        }
+      }
+    },
+    "warnings": {
+      "type": "array",
+      "maxItems": 1000,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["code"],
+        "properties": {
+          "code": {
+            "type": "string",
+            "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+          },
+          "path": {
+            "$ref": "#/$defs/jsonPointer"
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "opaqueId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 180
+    },
+    "jsonPointer": {
+      "type": "string",
+      "pattern": "^(|(?:/(?:[^~/]|~[01])*)*)$",
+      "maxLength": 512
+    }
+  }
+}

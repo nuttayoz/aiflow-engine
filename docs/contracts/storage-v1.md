@@ -89,7 +89,7 @@ Object status is limited to:
 | `DELETED`        | The exact accepted version was confirmed removed; metadata is a tombstone |
 | `ABANDONED`      | Reservation expired or upload failed before becoming available            |
 
-Domain records reference `storageObjectId`. `documents` references its source storage object; future execution-artifact records reference extraction, mapping, review, or delivery artifacts. `storage_objects` does not use a polymorphic `owner_type/owner_id` relationship.
+Domain records reference `storageObjectId`. `documents` references its source storage object; a successful stage attempt references its single canonical extraction, mapping, review, or delivery output. A separate execution-artifact table is deferred until a stage demonstrably needs multiple independently retained outputs. `storage_objects` does not use a polymorphic `owner_type/owner_id` relationship.
 
 The database schema details and retention of tombstone metadata are governed by the [PostgreSQL contract](postgresql-v1.md).
 

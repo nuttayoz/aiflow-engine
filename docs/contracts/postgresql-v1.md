@@ -44,11 +44,14 @@ The package named below owns the business meaning and repository contract. Physi
 | `storage`     | `storage_objects`                                                    | Provider-neutral object location, exact version, checksum, status, retention, and deletion intent |
 | `documents`   | `documents`                                                          | Immutable source identity and accepted source-storage reference                                   |
 | `executions`  | `executions`, `execution_stages`, `stage_attempts`                   | Provider-neutral lifecycle, guarded current state, waits, retries, leases, and attempt history    |
+| `extraction`  | `extraction_requests`, `extraction_callback_events`                  | External extraction operation, reconciliation, callback deduplication, and provider cleanup       |
 | `core`        | `idempotency_records`, `audit_events`                                | Boundary idempotency and append-only audit facts shared by use cases                              |
 | `messaging`   | `outbox_messages`, `inbox_messages`                                  | Atomic publication intent and logical-consumer deduplication                                      |
 | `database`    | `scheduler_leases`, `typeorm_migrations`                             | Global job leadership and schema history                                                          |
 
-Future phases add provider-neutral tables only when their feature arrives, for example upload sessions/parts, ingestions, connector subscriptions, review tasks, and execution-artifact references. Provider-specific fields remain inside validated connector configuration or connector-owned records; they do not become columns on `executions`.
+Future phases add provider-neutral tables only when their feature arrives, for example upload sessions/parts, ingestions, connector subscriptions, and review tasks. Provider-specific fields remain inside validated connector configuration or connector-owned records; they do not become columns on `executions`.
+
+The extraction tables are Phase 2 additions. Their ownership is fixed here so the OCR contract is unambiguous; Phase 1 does not create unused provider tables.
 
 No module writes another module's table directly. A cross-module change is performed by an application use case inside one transaction through the owning repository adapters.
 
@@ -63,9 +66,9 @@ documents
   -> storage_objects (source bytes)
   -> executions
        -> execution_stages
-            -> stage_attempts
-
-future execution_artifacts -> storage_objects (derived bytes)
+            -> stage_attempts -> storage_objects (optional canonical stage output)
+                 -> extraction_requests (for EXTRACT)
+                      -> extraction_callback_events
 
 accepted transaction -> outbox_messages -> RabbitMQ
 RabbitMQ delivery -> inbox_messages + durable stage claim
@@ -161,7 +164,7 @@ Rules:
 
 `execution_stages` stores one row per canonical stage for the execution. It holds the current stage status, attempt count, next retry/reconciliation time, current lease owner/expiry, and current safe failure projection.
 
-`stage_attempts` preserves one row per attempt with identity and number, start/end times, terminal outcome, safe failure data, lease history, and safe provider operation reference. An attempt row may move only from `RUNNING` to one terminal attempt status.
+`stage_attempts` preserves one row per attempt with identity and number, start/end times, terminal outcome, safe failure data, lease history, and optional canonical output storage-object/schema reference. One canonical output per successful stage is sufficient initially; a separate execution-artifact table is added only when a demonstrated stage requires multiple independently retained outputs. An attempt row may move only from `RUNNING` to one terminal attempt status.
 
 Critical constraints:
 
@@ -173,6 +176,22 @@ Critical constraints:
 - Terminal execution and attempt history cannot return to an active state.
 
 The database enforces structural invariants. The domain state machine remains responsible for which transition is semantically valid.
+
+### Extraction requests and callbacks
+
+`extraction_requests` stores one provider-neutral external extraction operation per `EXTRACT` stage attempt: immutable profile/adapter references, stable submission key, safe provider operation/account references, guarded state, reconciliation due/deadline, result storage-object reference, safe failure projection, and provider-copy deletion status.
+
+`extraction_callback_events` is append-only callback deduplication metadata: owning request/tenant, adapter/account, provider event ID, body hash, allow-listed event type/status, authentication outcome, receipt time, and handling outcome. It never stores the callback body or extracted values.
+
+Rules:
+
+- `(tenant_id, stage_attempt_id)` is unique for extraction requests.
+- A provider operation reference is unique within its adapter/account when present.
+- `(adapter_id, provider_account_ref, provider_event_id)` is unique for callback events.
+- Callback tenant/project authority comes from the stored extraction request.
+- Request state changes, reconciliation/deletion outbox intent, and safe audit facts commit atomically.
+- Provider calls, result transfer, and callback authentication do not occur inside a database transaction.
+- Exact behavior and retention/deletion responsibilities follow [`ocr-v1.md`](ocr-v1.md).
 
 ### Idempotency records
 
@@ -337,18 +356,20 @@ The migration suite must prove:
 
 These initial values inherit the proposed engineering envelope and require product/platform confirmation:
 
-| Record                           | Initial retention rule                                             |
-| -------------------------------- | ------------------------------------------------------------------ |
-| Active workflows/connections     | Retain while active or referenced                                  |
-| Archived workflow versions       | Retain at least as long as referencing executions/audit facts      |
-| Documents and execution metadata | 1 year after terminal execution, subject to object-deletion policy |
-| Execution stages and attempts    | Same lifetime as their execution                                   |
-| Audit events                     | 1 year                                                             |
-| Idempotency records              | 90 days and never shorter than the accepted external replay window |
-| Inbox records                    | 90 days and never shorter than broker/DLQ replay policy            |
-| Confirmed outbox rows            | 30 days after `published_at`                                       |
-| Unpublished outbox rows          | Never expire automatically                                         |
-| Scheduler leases                 | Current row retained; obsolete job rows removed explicitly         |
+| Record                           | Initial retention rule                                              |
+| -------------------------------- | ------------------------------------------------------------------- |
+| Active workflows/connections     | Retain while active or referenced                                   |
+| Archived workflow versions       | Retain at least as long as referencing executions/audit facts       |
+| Documents and execution metadata | 1 year after terminal execution, subject to object-deletion policy  |
+| Execution stages and attempts    | Same lifetime as their execution                                    |
+| Extraction requests              | Same lifetime as their execution; provider copies follow OCR policy |
+| Extraction callback events       | 90 days and never shorter than provider callback replay policy      |
+| Audit events                     | 1 year                                                              |
+| Idempotency records              | 90 days and never shorter than the accepted external replay window  |
+| Inbox records                    | 90 days and never shorter than broker/DLQ replay policy             |
+| Confirmed outbox rows            | 30 days after `published_at`                                        |
+| Unpublished outbox rows          | Never expire automatically                                          |
+| Scheduler leases                 | Current row retained; obsolete job rows removed explicitly          |
 
 Retention cleanup uses small ordered batches, explicit dependency order, and metrics. It does not issue broad unbounded deletes. A failed S3 deletion keeps document deletion intent and is retried/reconciled; database metadata is not removed first.
 

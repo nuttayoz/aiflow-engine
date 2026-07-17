@@ -230,7 +230,7 @@ Scheduler work uses `actor.type: SYSTEM` and records the job/run identifier. Pro
 
 Callback authentication is defined by each integration contract:
 
-- OCR callbacks authenticate with the provider's signed JWT/HMAC/mTLS mechanism and correlate to a stored provider request.
+- OCR callbacks authenticate with the provider's signed JWT/HMAC/mTLS mechanism and correlate to a stored provider request as defined by [`ocr-v1.md`](ocr-v1.md).
 - SharePoint notifications validate Microsoft subscription/client-state semantics and derive tenant/project from the stored subscription.
 - Review callbacks validate the Review System's signed/one-time capability and stored review task.
 - Service-to-service administrative APIs use a dedicated workload/service token with narrow audience and permissions.
