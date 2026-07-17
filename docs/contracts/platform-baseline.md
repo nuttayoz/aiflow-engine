@@ -130,6 +130,17 @@ The Phase 0B provider capabilities, durable request/callback model, reconciliati
 
 The Phase 0B product separation, connection/action model, authentication, effect identity, delivery/reconciliation, receipt, security, and test boundary are defined in [`dynamics-destination-v1.md`](dynamics-destination-v1.md).
 
+### Workflow provisioning
+
+- Keep workflow activation/deactivation in AiFlow Engine; do not create an n8n workflow or per-workflow infrastructure.
+- Persist one idempotent operation before any live provider validation or external provisioning call.
+- Let connector descriptors declare `NONE`, `VALIDATE_ONLY`, or `MANAGED` provisioning behavior.
+- Keep the current active version running while a replacement validates/prepares, then switch the pointer atomically.
+- Close local intake immediately on deactivation while managed cleanup proceeds durably.
+- Reconcile unknown external provisioning effects by a stable key; never blindly create another provider resource.
+
+The Phase 0B API, capability modes, validation boundary, operation model, version cutover, deactivation, recovery, and DevPortal projection are defined in [`workflow-provisioning-v1.md`](workflow-provisioning-v1.md).
+
 ### Kubernetes and operations
 
 - Scale API, worker queue groups, and scheduler independently from the same image.
@@ -160,33 +171,35 @@ Production measurements must replace assumptions about document size, pages, pro
 
 ## Required platform confirmations
 
-| ID           | Owner             | Confirmation required                                                                                        | Blocks                   |
-| ------------ | ----------------- | ------------------------------------------------------------------------------------------------------------ | ------------------------ |
-| `PG-01`      | Platform/DBA      | Confirm PostgreSQL 18.4 availability and supported extensions/features                                       | Migration implementation |
-| `PG-02`      | Platform/DBA      | Total engine connection budget and proxy/pooler convention                                                   | Replica and pool sizing  |
-| `PG-03`      | Platform/DBA      | TLS/CA, database/schema ownership, application and migration identities                                      | Database connection      |
-| `PG-04`      | Platform/DBA      | Migration execution/approval process, backups/PITR, confirmed RPO/RTO                                        | Phase 1 recovery proof   |
-| `RMQ-01`     | Platform          | Confirm RabbitMQ 4.3.2, node/AZ topology, quorum queue and policy support                                    | Queue topology           |
-| `RMQ-02`     | Platform          | TLS/CA, authentication, vhost naming, permissions, maximum message and queue policies                        | Broker connection        |
-| `RMQ-03`     | Platform          | KEDA availability or approved RabbitMQ-metrics/HPA alternative                                               | Worker autoscaling       |
-| `S3-01`      | Platform/Security | AWS account/Region, bucket naming/ownership, versioning, Block Public Access, and infrastructure owner       | Storage adapter          |
-| `S3-02`      | Platform/Security | KMS key/alias, key policy, S3 Bucket Key approval, rotation, and recovery behavior                           | Storage encryption       |
-| `S3-03`      | Platform/Security | Pod Identity/IRSA roles, exact IAM/KMS actions including API checksum verification, and VPC/bucket policies  | Storage authentication   |
-| `S3-04`      | Platform/Security | Browser origins, regional endpoint, CORS, signature-age cap, and gateway behavior                            | Direct upload            |
-| `S3-05`      | Platform/Security | Lifecycle, noncurrent/delete-marker cleanup, inventory/audit logging, replication, and restore               | Retention and recovery   |
-| `AUTH-01`    | Auth team         | JWT versus opaque token; issuer/discovery/JWKS, audience, algorithms and token lifetime                      | Authentication guard     |
-| `AUTH-02`    | Auth/Product      | Exact actor, tenant, role/scope, token-ID and service-identity claims; multi-tenant selection                | Tenant context           |
-| `AUTH-03`    | Auth/Platform     | Project authorization contract, service authentication, timeout and revocation behavior                      | Resource authorization   |
-| `OCR-01`     | Product/Platform  | Provider/product/API version, Regions, endpoints, authentication, sandbox, and support owner                 | OCR adapter              |
-| `OCR-02`     | Provider/Platform | Submission idempotency/correlation, operation status/result, terminal states, and callback contract          | OCR reliability          |
-| `OCR-03`     | Provider/Security | Quotas/limits/latency, retention/deletion, residency, subprocessors, training terms, and DPA                 | OCR production approval  |
-| `DYN-01`     | Product/Customer  | Product/version, hosting, tenant/environment/company, first action/entities, and sandbox                     | Dynamics adapter         |
-| `DYN-02`     | Customer/Platform | API/custom extension route/version, effect-key uniqueness/lookup, atomicity, deployment, and upgrade owner   | Delivery reliability     |
-| `DYN-03`     | Security/Platform | Entra consent/permissions/credentials or approved legacy auth; endpoint/TLS/private-network convention       | Dynamics authorization   |
-| `OPS-01`     | Platform          | Existing CI template, deployment values convention, secret manager, Sentry/metrics/trace endpoints           | Production delivery      |
-| `PRODUCT-01` | Product/Security  | File/page limits, types, malware controls, retention, availability, throughput, RPO and RTO targets          | Contract freeze          |
-| `PRODUCT-02` | Product           | Initial extraction profiles, immutable output schemas/paths, confidence/review rules, and result limit       | OCR profile freeze       |
-| `PRODUCT-03` | Product/Finance   | Destination schema/mappings, review/posting exclusions, receipt/correction behavior, and financial retention | Dynamics action freeze   |
+| ID           | Owner              | Confirmation required                                                                                         | Blocks                   |
+| ------------ | ------------------ | ------------------------------------------------------------------------------------------------------------- | ------------------------ |
+| `PG-01`      | Platform/DBA       | Confirm PostgreSQL 18.4 availability and supported extensions/features                                        | Migration implementation |
+| `PG-02`      | Platform/DBA       | Total engine connection budget and proxy/pooler convention                                                    | Replica and pool sizing  |
+| `PG-03`      | Platform/DBA       | TLS/CA, database/schema ownership, application and migration identities                                       | Database connection      |
+| `PG-04`      | Platform/DBA       | Migration execution/approval process, backups/PITR, confirmed RPO/RTO                                         | Phase 1 recovery proof   |
+| `RMQ-01`     | Platform           | Confirm RabbitMQ 4.3.2, node/AZ topology, quorum queue and policy support                                     | Queue topology           |
+| `RMQ-02`     | Platform           | TLS/CA, authentication, vhost naming, permissions, maximum message and queue policies                         | Broker connection        |
+| `RMQ-03`     | Platform           | KEDA availability or approved RabbitMQ-metrics/HPA alternative                                                | Worker autoscaling       |
+| `S3-01`      | Platform/Security  | AWS account/Region, bucket naming/ownership, versioning, Block Public Access, and infrastructure owner        | Storage adapter          |
+| `S3-02`      | Platform/Security  | KMS key/alias, key policy, S3 Bucket Key approval, rotation, and recovery behavior                            | Storage encryption       |
+| `S3-03`      | Platform/Security  | Pod Identity/IRSA roles, exact IAM/KMS actions including API checksum verification, and VPC/bucket policies   | Storage authentication   |
+| `S3-04`      | Platform/Security  | Browser origins, regional endpoint, CORS, signature-age cap, and gateway behavior                             | Direct upload            |
+| `S3-05`      | Platform/Security  | Lifecycle, noncurrent/delete-marker cleanup, inventory/audit logging, replication, and restore                | Retention and recovery   |
+| `AUTH-01`    | Auth team          | JWT versus opaque token; issuer/discovery/JWKS, audience, algorithms and token lifetime                       | Authentication guard     |
+| `AUTH-02`    | Auth/Product       | Exact actor, tenant, role/scope, token-ID and service-identity claims; multi-tenant selection                 | Tenant context           |
+| `AUTH-03`    | Auth/Platform      | Project authorization contract, service authentication, timeout and revocation behavior                       | Resource authorization   |
+| `OCR-01`     | Product/Platform   | Provider/product/API version, Regions, endpoints, authentication, sandbox, and support owner                  | OCR adapter              |
+| `OCR-02`     | Provider/Platform  | Submission idempotency/correlation, operation status/result, terminal states, and callback contract           | OCR reliability          |
+| `OCR-03`     | Provider/Security  | Quotas/limits/latency, retention/deletion, residency, subprocessors, training terms, and DPA                  | OCR production approval  |
+| `DYN-01`     | Product/Customer   | Product/version, hosting, tenant/environment/company, first action/entities, and sandbox                      | Dynamics adapter         |
+| `DYN-02`     | Customer/Platform  | API/custom extension route/version, effect-key uniqueness/lookup, atomicity, deployment, and upgrade owner    | Delivery reliability     |
+| `DYN-03`     | Security/Platform  | Entra consent/permissions/credentials or approved legacy auth; endpoint/TLS/private-network convention        | Dynamics authorization   |
+| `PROV-01`    | Product/Platform   | Operation polling UX, serialization, immediate deactivation, version replacement, cleanup, and archive policy | Provisioning behavior    |
+| `PROV-02`    | Connector/Platform | Operation/provider deadlines, retry/admission limits, connector-version support, and managed-effect evidence  | Provisioning reliability |
+| `OPS-01`     | Platform           | Existing CI template, deployment values convention, secret manager, Sentry/metrics/trace endpoints            | Production delivery      |
+| `PRODUCT-01` | Product/Security   | File/page limits, types, malware controls, retention, availability, throughput, RPO and RTO targets           | Contract freeze          |
+| `PRODUCT-02` | Product            | Initial extraction profiles, immutable output schemas/paths, confidence/review rules, and result limit        | OCR profile freeze       |
+| `PRODUCT-03` | Product/Finance    | Destination schema/mappings, review/posting exclusions, receipt/correction behavior, and financial retention  | Dynamics action freeze   |
 
 ## Phase decision
 

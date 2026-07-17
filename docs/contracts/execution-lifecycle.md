@@ -14,6 +14,8 @@ entry connector -> DOCUMENT_STAGED -> EXTRACT -> MAP -> optional REVIEW -> DELIV
 
 Entry discovery, download, checksum verification, and storage staging are ingestion responsibilities. They are not execution stages. Adding an entry or destination provider must not change the core lifecycle.
 
+The active-version intake gate, immutable version snapshot, activation, and deactivation behavior are defined in [`workflow-provisioning-v1.md`](workflow-provisioning-v1.md).
+
 Direct upload, provider streaming, derived artifacts, and the `AVAILABLE` storage boundary are defined in [`storage-v1.md`](storage-v1.md).
 
 External extraction submission, callback hints, polling, reconciliation, and canonical result acceptance are defined in [`ocr-v1.md`](ocr-v1.md).

@@ -74,8 +74,8 @@ All paths below are under `/devportal-backend-api`. Successful workflow response
 | `POST /workflow`                                                    | Create wizard                                          | Replace with canonical workflow creation                                                                              |
 | `PUT /workflow`                                                     | Edit wizard                                            | Replace with immutable canonical workflow-version creation                                                            |
 | `DELETE /workflow/project/:projectId/workflow/:workflowId`          | Workflow table                                         | Replace with canonical engine deletion/archive                                                                        |
-| `POST /workflow/:workflowId/activate`                               | Workflow table                                         | Replace with canonical engine activation                                                                              |
-| `POST /workflow/:workflowId/deactivate`                             | Workflow table                                         | Replace with canonical engine deactivation                                                                            |
+| `POST /workflow/:workflowId/activate`                               | Workflow table                                         | Replace with canonical engine activation plus operation polling                                                       |
+| `POST /workflow/:workflowId/deactivate`                             | Workflow table                                         | Replace with canonical engine deactivation plus cleanup status                                                        |
 | `GET /workflow/appevent`                                            | Step Two application list                              | Replace with direct connector/action descriptor queries                                                               |
 | `GET /workflow/appevent/operation/:appEventId`                      | Step Two event list                                    | Replace with connector action schema/options                                                                          |
 | `GET /workflow/ml/field/service/:serviceId`                         | Step Two field mapping                                 | Replace with the canonical extraction-profile field schema                                                            |
@@ -154,7 +154,7 @@ Although `devportal-backend` documents and can produce payload v2, the current U
 | -------------------------------------------------- | --------------------------------------- | ----------------------------------------------------------------- | ------------------------------------------------- |
 | `project_id`                                       | Workflow belongs to a DevPortal project | `projectId`/tenant-scoped parent                                  | Stable                                            |
 | `workflow_name`                                    | User-visible name                       | `workflow.name`                                                   | Stable                                            |
-| `active`                                           | Whether new documents may enter         | Activation of a validated workflow version                        | Stable behavior, different implementation         |
+| `active`                                           | Whether new documents may enter         | Server-derived active version/intake gate plus provisioning state | Stable toggle intent, asynchronous implementation |
 | `is_review`                                        | Human review required                   | `reviewPolicy.required`                                           | Stable                                            |
 | `nodes.service.serviceId`                          | Selected extraction service/profile     | `extraction.profileId`                                            | Stable intent                                     |
 | `nodes.service` labels                             | Display title/icon lookup               | Extraction catalog projection                                     | Do not store duplicated labels as authority       |
@@ -393,6 +393,8 @@ Contract tests should assert the direct DevPortal/engine contract separately fro
 
 These changes keep the current routes, Redux organization, page ownership, and overall visual flow.
 
+The exact n8n-free operation, version-replacement, deactivation, polling, and safe-failure behavior is defined in [`workflow-provisioning-v1.md`](workflow-provisioning-v1.md). DevPortal derives its toggle from the engine activation projection rather than keeping an independent `active` boolean.
+
 ## Open discovery items
 
 This inventory does not close Phase 0B. The following items still block later phase contracts:
@@ -405,6 +407,7 @@ This inventory does not close Phase 0B. The following items still block later ph
 6. Confirm Review System ownership, approval/rejection callback, token, expiry, and artifact-retention contracts.
 7. Confirm the Microsoft product, action, connection, and schema values required by [`dynamics-destination-v1.md`](dynamics-destination-v1.md).
 8. Confirm connection secret ownership and OAuth callback ingress in the existing platform.
+9. Confirm the product/platform values required by [`workflow-provisioning-v1.md`](workflow-provisioning-v1.md).
 
 ## Acceptance criteria for this contract slice
 

@@ -56,6 +56,7 @@ Progress:
 - Object storage v1 bucket controls, storage-object model, direct/provider transfer, integrity, exact-version lifecycle, retention, and test boundary: [`contracts/storage-v1.md`](contracts/storage-v1.md).
 - External OCR v1 provider capabilities, durable requests, authenticated callback hints, reconciliation, canonical result artifact, quotas, and deletion boundary: [`contracts/ocr-v1.md`](contracts/ocr-v1.md).
 - Microsoft Dynamics destination v1 product separation, connection/action descriptors, stable effect identity, receipt, unknown-outcome reconciliation, and Business Central draft recommendation: [`contracts/dynamics-destination-v1.md`](contracts/dynamics-destination-v1.md).
+- Workflow provisioning v1 activation API, operation lifecycle, connector capability modes, atomic version replacement, deactivation, and recovery: [`contracts/workflow-provisioning-v1.md`](contracts/workflow-provisioning-v1.md).
 
 Required decisions:
 
@@ -65,9 +66,10 @@ Required decisions:
 4. Authentication token validation plus canonical tenant, actor, role, and service-identity claims.
 5. Confirm the provider/product values and capabilities required by [`contracts/ocr-v1.md`](contracts/ocr-v1.md).
 6. Confirm the product, action, endpoint, authentication, effect extension, and schema values required by [`contracts/dynamics-destination-v1.md`](contracts/dynamics-destination-v1.md).
-7. Existing Review System ownership and callback contract.
-8. Existing DevPortal endpoints, request/response shapes, and workflow payloads that the compatibility layer must preserve.
-9. Initial retention, file-size, page-count, throughput, availability, and latency targets.
+7. Confirm the operation UX, limits, connector-version support, cleanup, and archive values required by [`contracts/workflow-provisioning-v1.md`](contracts/workflow-provisioning-v1.md).
+8. Existing Review System ownership and callback contract.
+9. Existing DevPortal endpoints, request/response shapes, and workflow payloads that the compatibility layer must preserve.
+10. Initial retention, file-size, page-count, throughput, availability, and latency targets.
 
 Deliverables:
 
@@ -79,6 +81,7 @@ Deliverables:
 - Initial Amazon S3 ownership, transfer, integrity, retention, and local-development proposal: [`contracts/storage-v1.md`](contracts/storage-v1.md).
 - Initial external OCR request, callback, reconciliation, canonical artifact, quota, and deletion proposal: [`contracts/ocr-v1.md`](contracts/ocr-v1.md).
 - Initial Microsoft Dynamics destination connection, action, effective-once write, receipt, and reconciliation proposal: [`contracts/dynamics-destination-v1.md`](contracts/dynamics-destination-v1.md).
+- Initial n8n-free workflow activation, connector provisioning, version cutover, deactivation, and recovery proposal: [`contracts/workflow-provisioning-v1.md`](contracts/workflow-provisioning-v1.md).
 - Compatibility inventory for the existing DevPortal and `devportal-backend`.
 
 Exit criteria:
@@ -95,7 +98,7 @@ Implementation order:
 
 1. Configuration, secret references, tenant context, correlation identifiers, and structured logging.
 2. PostgreSQL connection, migrations, module-owned repositories, and health checks.
-3. Workflow, workflow-version, document, execution, stage-attempt, idempotency, inbox, and outbox records.
+3. Workflow, workflow-version, activation-operation, document, execution, stage-attempt, idempotency, inbox, and outbox records.
 4. Explicit execution state machine and transition guards.
 5. RabbitMQ connection lifecycle, topology declaration, publisher confirms, manual acknowledgements, retries, and DLQs.
 6. Transactional outbox publisher and inbox deduplication.
@@ -108,6 +111,7 @@ Exit criteria:
 
 - A test workflow/execution can move through synthetic stages without a real provider.
 - A committed database command survives API termination before RabbitMQ publication.
+- A duplicate or interrupted workflow activation produces one operation and one atomic active-version switch.
 - Duplicate messages do not duplicate a stage transition.
 - A worker crash before acknowledgement causes safe redelivery.
 - Exhausted retries appear in an inspectable DLQ and can be safely replayed.

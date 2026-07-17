@@ -163,8 +163,9 @@ S3 provides strong read-after-write consistency for object PUT/DELETE and object
 2. validates active workflow, filename metadata, allowed type, size, and full-content SHA-256 format;
 3. applies per-tenant active-session and byte quotas;
 4. creates the upload-session and `RESERVED` storage-object rows idempotently;
-5. generates the server-owned key and an operation-specific SigV4 upload plan;
-6. returns the plan without persisting or logging its URLs.
+5. pins the workflow's exact active version on the session;
+6. generates the server-owned key and an operation-specific SigV4 upload plan;
+7. returns the plan without persisting or logging its URLs.
 
 For multipart, the engine creates the S3 multipart upload only after the database reservation exists and stores the returned upload ID server-side. If S3 creation succeeds but persisting that upload ID fails, the bucket's incomplete-upload lifecycle rule removes the untracked parts; normal retries use the durable session rather than guessing an upload ID.
 
@@ -222,7 +223,7 @@ Presigned URLs are bearer capabilities and can be reused until expiry unless the
 
 `POST /api/v1/upload-sessions/:uploadSessionId/complete` is authenticated and requires an idempotency key.
 
-1. Load the session by trusted tenant and require the expected active state.
+1. Load the session by trusted tenant, reauthorize the workflow/project, require `acceptingNewDocuments=true`, and require the current active version to equal the session's pinned version.
 2. For multipart, validate the exact expected part set and call S3 completion once; retries reconcile the stored upload ID and object state.
 3. `HeadObject` the reserved key and exact returned version with checksum mode.
 4. Validate size, checksum, content type, encryption, and conditional-write outcome.
@@ -231,19 +232,23 @@ Presigned URLs are bearer capabilities and can be reused until expiry unless the
 
 If S3 completion succeeds but the database transaction fails, the session remains recoverable. The next idempotent completion or reconciler validates the existing exact object and commits the missing database transition; it never uploads another copy.
 
+If the workflow was deactivated or switched to a different active version after session creation, completion does not create a document/execution. It returns a stable non-retryable workflow-intake error, abandons the reservation, and schedules exact-version cleanup. The user starts a new session against the current active version.
+
 `DELETE /api/v1/upload-sessions/:uploadSessionId` aborts an active multipart upload where applicable, marks the reservation abandoned, and schedules any completed unexpected version for deletion. It cannot delete an available document.
 
 ## Provider-entry ingestion
 
 SharePoint and future entry connectors use the same storage port:
 
-1. Persist/deduplicate the provider source identity and reserve one storage object.
+1. Load the active managed binding/version, persist/deduplicate the provider source identity, and reserve one storage object.
 2. Open an authenticated provider download stream.
 3. Stream through a bounded checksum/size transform directly to conditional S3 upload, using multipart only when size/stream behavior requires it.
 4. Apply backpressure and per-tenant/per-connection concurrency limits; never buffer the complete document.
 5. Revalidate provider version/eTag when the source may have changed during download.
 6. `HeadObject` and verify the exact S3 result.
-7. Atomically mark storage available and create `DOCUMENT_STAGED`, execution, outbox, and audit facts.
+7. Recheck that the binding/version remains eligible, then atomically mark storage available and create `DOCUMENT_STAGED`, execution, outbox, and audit facts.
+
+If the final binding/version check fails, the object does not become a document. The reservation is abandoned and exact-version cleanup is scheduled.
 
 If the source changes during transfer, the attempt is abandoned and retried against the new source version according to connector policy. It does not publish an execution for ambiguous bytes.
 

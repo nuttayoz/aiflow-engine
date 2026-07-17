@@ -37,19 +37,19 @@ The runtime application identity can read and write approved `aiflow` tables but
 
 The package named below owns the business meaning and repository contract. Physical TypeORM code remains in the database adapter so domain packages do not import TypeORM.
 
-| Logical owner | Initial tables                                                            | Purpose                                                                                           |
-| ------------- | ------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
-| `workflows`   | `workflows`, `workflow_versions`, `workflow_version_connection_refs`      | Stable workflow identity, immutable definitions, activation, and relational connection references |
-| `connections` | `connections`                                                             | Tenant-owned safe provider configuration and external secret reference                            |
-| `storage`     | `storage_objects`                                                         | Provider-neutral object location, exact version, checksum, status, retention, and deletion intent |
-| `documents`   | `documents`                                                               | Immutable source identity and accepted source-storage reference                                   |
-| `executions`  | `executions`, `execution_stages`, `stage_attempts`, `delivery_operations` | Provider-neutral lifecycle, attempts, waits, outputs, destination effects, and receipts           |
-| `extraction`  | `extraction_requests`, `extraction_callback_events`                       | External extraction operation, reconciliation, callback deduplication, and provider cleanup       |
-| `core`        | `idempotency_records`, `audit_events`                                     | Boundary idempotency and append-only audit facts shared by use cases                              |
-| `messaging`   | `outbox_messages`, `inbox_messages`                                       | Atomic publication intent and logical-consumer deduplication                                      |
-| `database`    | `scheduler_leases`, `typeorm_migrations`                                  | Global job leadership and schema history                                                          |
+| Logical owner | Initial tables                                                                                         | Purpose                                                                                           |
+| ------------- | ------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------- |
+| `workflows`   | `workflows`, `workflow_versions`, `workflow_version_connection_refs`, `workflow_activation_operations` | Stable workflow identity, immutable definitions, durable activation, and connection references    |
+| `connections` | `connections`                                                                                          | Tenant-owned safe provider configuration and external secret reference                            |
+| `storage`     | `storage_objects`                                                                                      | Provider-neutral object location, exact version, checksum, status, retention, and deletion intent |
+| `documents`   | `documents`                                                                                            | Immutable source identity and accepted source-storage reference                                   |
+| `executions`  | `executions`, `execution_stages`, `stage_attempts`, `delivery_operations`                              | Provider-neutral lifecycle, attempts, waits, outputs, destination effects, and receipts           |
+| `extraction`  | `extraction_requests`, `extraction_callback_events`                                                    | External extraction operation, reconciliation, callback deduplication, and provider cleanup       |
+| `core`        | `idempotency_records`, `audit_events`                                                                  | Boundary idempotency and append-only audit facts shared by use cases                              |
+| `messaging`   | `outbox_messages`, `inbox_messages`                                                                    | Atomic publication intent and logical-consumer deduplication                                      |
+| `database`    | `scheduler_leases`, `typeorm_migrations`                                                               | Global job leadership and schema history                                                          |
 
-Future phases add provider-neutral tables only when their feature arrives, for example upload sessions/parts, ingestions, connector subscriptions, and review tasks. Provider-specific fields remain inside validated connector configuration or connector-owned records; they do not become columns on `executions`.
+Future phases add provider-neutral tables only when their feature arrives, for example upload sessions/parts, ingestions, managed connector-provisioning bindings, and review tasks. Provider-specific fields remain inside validated connector configuration or connector-owned records; they do not become columns on `executions`.
 
 The extraction and delivery-operation tables are Phase 2 additions. Their ownership is fixed here so provider contracts are unambiguous; Phase 1 does not create unused provider tables.
 
@@ -61,6 +61,7 @@ No module writes another module's table directly. A cross-module change is perfo
 workflows
   -> workflow_versions
        -> workflow_version_connection_refs -> connections
+  -> workflow_activation_operations -> target workflow_version
 
 documents
   -> storage_objects (source bytes)
@@ -130,10 +131,22 @@ Rules:
 - `(tenant_id, workflow_id, version_number)` is unique.
 - An active version must belong to the same tenant and workflow.
 - A persisted workflow version is never edited. Editing creates a new row.
-- Activation changes only the workflow's active-version pointer and audit facts; it never rewrites accepted executions.
+- Activation changes workflow activation fields and creates operation/audit facts; it never rewrites a persisted version or accepted execution.
 - Archived workflows remain while referenced by retained executions.
 
 `workflow_version_connection_refs` is a relational projection of connection IDs contained in the validated definition. It identifies the reference purpose and prevents a connection from being silently deleted while a workflow version depends on it. The JSON definition remains canonical; the projection is rebuilt and verified in the same creation transaction.
+
+`workflow_activation_operations` stores one durable activation/deactivation request: target/previous version, immutable definition/capability hashes, guarded operation step/status, attempt/lease/retry/reconciliation timing, safe failure, actor/correlation context, and timestamps.
+
+Rules:
+
+- A partial unique index permits at most one non-terminal operation per `(tenant_id, workflow_id)`.
+- Accepting an operation commits its workflow guard, idempotency result, audit fact, and outbox command atomically.
+- Activation changes `active_version_id` only after target validation/provisioning succeeds; a replacement failure leaves the previous pointer unchanged.
+- Deactivation clears `active_version_id` and closes local intake before external cleanup.
+- Provider calls occur outside transactions and require the current operation state version plus lease.
+- Terminal operation history is immutable.
+- Exact operation, cutover, cleanup, and future managed-binding behavior follows [`workflow-provisioning-v1.md`](workflow-provisioning-v1.md).
 
 ### Connections
 
@@ -289,30 +302,31 @@ Rules:
 - Transactions are short and contain database work only. HTTP/provider calls, S3 transfers, RabbitMQ confirms, and user waits never occur inside a transaction.
 - A state transition updates the aggregate/stage, closes or creates its attempt, inserts outbox/audit records, and updates idempotency where applicable in one transaction.
 - A transition succeeds only when its guarded update affects the expected row. Zero affected rows means duplicate, stale, forbidden, or lost lease and is resolved by reloading state.
-- Multi-row locks are acquired in a stable order: workflow/execution root, stage, attempt, then outbox/audit rows.
+- Multi-row locks are acquired in a stable order: workflow/execution root, activation operation or stage, attempt, then outbox/audit rows.
 - Deadlocks and serialization failures are retried only around the complete idempotent transaction, with a small bounded retry count and metrics.
 - Higher isolation is selected only for a use case whose invariant cannot be represented by a unique constraint, guarded update, or explicit row lock.
 
 Current stage leases live in `execution_stages`. A claim atomically verifies eligibility and expected execution version, installs owner/expiry, increments the attempt number, and creates the attempt. Result commit verifies the same tenant, execution/stage, lease owner, unexpired lease, and expected state version.
 
-The scheduler scans due retries and expired leases in stable bounded batches with `FOR UPDATE SKIP LOCKED`. It creates durable outbox commands and releases the rows in one transaction; it does not perform provider work.
+The scheduler scans due workflow/execution retries and expired operation/stage leases in stable bounded batches with `FOR UPDATE SKIP LOCKED`. It creates durable outbox commands and releases the rows in one transaction; it does not perform provider work.
 
 ## Required access paths
 
 Initial migrations add indexes only for known contract queries:
 
-| Query                         | Leading index columns or predicate                             |
-| ----------------------------- | -------------------------------------------------------------- |
-| Project workflow list         | `(tenant_id, project_id, created_at, id)`                      |
-| Workflow version history      | `(tenant_id, workflow_id, version_number)`                     |
-| Workflow execution list       | `(tenant_id, workflow_id, created_at, id)`                     |
-| Execution stage lookup        | `(tenant_id, execution_id, stage)`                             |
-| Due retry/reconciliation scan | `(next_attempt_at, execution_id)` for due-capable stage states |
-| Expired stage lease scan      | `(lease_expires_at, execution_id)` for running stages          |
-| Unpublished outbox scan       | `(available_at, id)` where `published_at IS NULL`              |
-| Inbox deduplication           | unique `(consumer_name, message_id)`                           |
-| Mutation idempotency          | unique `(tenant_id, operation_scope, idempotency_key)`         |
-| Resource audit history        | `(tenant_id, resource_type, resource_id, occurred_at, id)`     |
+| Query                         | Leading index columns or predicate                                         |
+| ----------------------------- | -------------------------------------------------------------------------- |
+| Project workflow list         | `(tenant_id, project_id, created_at, id)`                                  |
+| Workflow version history      | `(tenant_id, workflow_id, version_number)`                                 |
+| Current/due provisioning      | Partial `(status, next_attempt_at, id)` and `(lease_expires_at, id)` paths |
+| Workflow execution list       | `(tenant_id, workflow_id, created_at, id)`                                 |
+| Execution stage lookup        | `(tenant_id, execution_id, stage)`                                         |
+| Due retry/reconciliation scan | `(next_attempt_at, execution_id)` for due-capable stage states             |
+| Expired stage lease scan      | `(lease_expires_at, execution_id)` for running stages                      |
+| Unpublished outbox scan       | `(available_at, id)` where `published_at IS NULL`                          |
+| Inbox deduplication           | unique `(consumer_name, message_id)`                                       |
+| Mutation idempotency          | unique `(tenant_id, operation_scope, idempotency_key)`                     |
+| Resource audit history        | `(tenant_id, resource_type, resource_id, occurred_at, id)`                 |
 
 Cursor APIs use the same stable sort tuple as their index and include the final unique `id` as a tie-breaker. Offset pagination is not used for unbounded operational lists.
 
@@ -377,6 +391,7 @@ These initial values inherit the proposed engineering envelope and require produ
 | -------------------------------- | ------------------------------------------------------------------- |
 | Active workflows/connections     | Retain while active or referenced                                   |
 | Archived workflow versions       | Retain at least as long as referencing executions/audit facts       |
+| Workflow activation operations   | Same workflow/audit lifetime; unresolved cleanup never auto-expires |
 | Documents and execution metadata | 1 year after terminal execution, subject to object-deletion policy  |
 | Execution stages and attempts    | Same lifetime as their execution                                    |
 | Extraction requests              | Same lifetime as their execution; provider copies follow OCR policy |

@@ -16,6 +16,8 @@ External OCR uses the existing extract/reconciliation commands plus one provider
 
 Microsoft destination delivery uses the existing connector-specific delivery and generic reconciliation commands defined by [`dynamics-destination-v1.md`](dynamics-destination-v1.md); no new queue family is required.
 
+Workflow activation/deactivation uses one provider-neutral provisioning command and queue defined by [`workflow-provisioning-v1.md`](workflow-provisioning-v1.md).
+
 Delivery is at least once. Publisher confirms and consumer acknowledgements reduce message loss but do not remove duplicate-delivery cases, so handlers must be idempotent. This matches RabbitMQ's [reliability guidance](https://www.rabbitmq.com/docs/reliability).
 
 ## Envelope
@@ -74,6 +76,7 @@ The envelope schema validates common metadata. Each message type has a separate 
 | `aiflow.storage.object.delete.requested.v1`                            | `storageObjectId`, `expectedStateVersion`                              | Permanently delete one eligible exact object version    |
 | `aiflow.storage.object.reconcile.requested.v1`                         | `storageObjectId`, `expectedStateVersion`                              | Reconcile PostgreSQL metadata with one exact object     |
 | `aiflow.extraction.provider-copy.delete.requested.v1`                  | `extractionRequestId`, `expectedStateVersion`                          | Delete/confirm one supported provider-side OCR copy     |
+| `aiflow.workflow.provisioning.requested.v1`                            | `provisioningOperationId`, `expectedStateVersion`                      | Validate/provision/reconcile one workflow operation     |
 
 Messages carry only lookup identifiers and concurrency guards. Workers load workflow configuration, connection references, object keys, retry policy, and provider state through tenant-scoped repositories.
 
@@ -105,12 +108,13 @@ The command routing key is the message `type` without the leading `aiflow.`. For
 | `aiflow.q.connector.<connector-id>.ingest.v1`  | `document.ingest.connector.<connector-id>.requested.v1`         | One installed entry connector       |
 | `aiflow.q.connector.<connector-id>.deliver.v1` | `execution.stage.deliver.connector.<connector-id>.requested.v1` | One installed destination connector |
 | `aiflow.q.storage.lifecycle.v1`                | `storage.object.*.requested.v1`                                 | Storage reconciliation and deletion |
+| `aiflow.q.workflow.provisioning.v1`            | `workflow.provisioning.requested.v1`                            | Workflow activation/cleanup workers |
 
 Each source queue has an inspectable dead-letter queue named `aiflow.dlq.<source-name>.v1`, bound to `aiflow.dlx.v1` by the source queue name.
 
 All work queues are durable quorum queues. RabbitMQ describes quorum queues as the default replicated choice when data safety matters; its [quorum queue documentation](https://www.rabbitmq.com/docs/quorum-queues) also requires careful delivery-limit and dead-letter configuration.
 
-Queue boundaries are per stage or installed connector capability—not per tenant, project, workflow, or connection. This keeps topology bounded while allowing Kubernetes worker deployments to scale independently with queue-specific concurrency.
+Queue boundaries are per stage, provisioning/storage lifecycle, or installed connector capability—not per tenant, project, workflow, or connection. This keeps topology bounded while allowing Kubernetes worker deployments to scale independently with queue-specific concurrency.
 
 Only enabled connector modules declare their stable queues and bindings. Runtime user input can never create arbitrary exchanges, queues, or binding keys.
 
@@ -214,3 +218,4 @@ The implementation must prove at least these cases:
 7. Operator replay is guarded, auditable, and safe when state has moved on.
 8. No queue or message contains document bytes or confidential credentials.
 9. One connector queue can scale independently without creating per-tenant topology.
+10. Duplicate provisioning commands cannot repeat a workflow cutover or external resource effect.
