@@ -265,7 +265,7 @@ A canonical definition should express intent rather than nodes, for example:
     "destination": {
       "connectorId": "microsoft-business-central",
       "connectionId": "connection-uuid",
-      "actionId": "create-purchase-invoice",
+      "actionId": "create-purchase-invoice-draft",
       "config": {}
     }
   }
@@ -403,7 +403,7 @@ This inventory does not close Phase 0B. The following items still block later ph
 4. Decide compatibility/redirect requirements for existing public `endpoint_url` callers.
 5. Confirm the extraction catalog/profile values required by [`ocr-v1.md`](ocr-v1.md) after `devportal-backend` no longer owns `ml_field`.
 6. Confirm Review System ownership, approval/rejection callback, token, expiry, and artifact-retention contracts.
-7. Confirm Microsoft Dynamics NAV versus Business Central version, entities, actions, and authentication before finalizing connector schemas.
+7. Confirm the Microsoft product, action, connection, and schema values required by [`dynamics-destination-v1.md`](dynamics-destination-v1.md).
 8. Confirm connection secret ownership and OAuth callback ingress in the existing platform.
 
 ## Acceptance criteria for this contract slice

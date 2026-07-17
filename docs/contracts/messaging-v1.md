@@ -14,6 +14,8 @@ The outbox/inbox records, claim transactions, leases, indexes, and retention rul
 
 External OCR uses the existing extract/reconciliation commands plus one provider-copy deletion command as defined by [`ocr-v1.md`](ocr-v1.md).
 
+Microsoft destination delivery uses the existing connector-specific delivery and generic reconciliation commands defined by [`dynamics-destination-v1.md`](dynamics-destination-v1.md); no new queue family is required.
+
 Delivery is at least once. Publisher confirms and consumer acknowledgements reduce message loss but do not remove duplicate-delivery cases, so handlers must be idempotent. This matches RabbitMQ's [reliability guidance](https://www.rabbitmq.com/docs/reliability).
 
 ## Envelope

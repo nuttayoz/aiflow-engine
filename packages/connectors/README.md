@@ -10,4 +10,6 @@ Initial connector targets:
 - Microsoft Business Central
 - Dynamics NAV
 
+Business Central and Dynamics NAV remain separate adapters because their API, authentication, version, customization, and reconciliation contracts differ. They share only the provider-neutral destination port and connector test suite.
+
 Future Google and other connectors will be added only after the connector SDK contract is implemented and approved.
