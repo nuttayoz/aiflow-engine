@@ -274,6 +274,19 @@ A canonical definition should express intent rather than nodes, for example:
 
 Connector descriptors must provide display metadata, connection requirements, JSON Schema-compatible configuration, secret annotations, resource-browse capabilities, and supported actions. Step Two renders those descriptors inside the existing wizard. A future Google connector can then be added without changing engine domain types or adding `/gdrive/*` APIs.
 
+## Custom extraction-template compatibility
+
+No personal-template authoring/list/edit UI or document-collection integration was found in the inspected `devportal` or `devportal-backend` source. Therefore the existing workflow UX is the compatibility target, but an unverified template administration screen is not rebuilt by assumption.
+
+- The existing Step One extraction selector lists built-in and authorized custom profiles from `/api/v1/extraction-profiles`.
+- A selected custom profile uses the same `definition.extraction.profileId` field as a built-in profile. Workflow-version creation freezes its exact immutable profile/template version.
+- Workflow create/edit does not send a legacy `my_template_endpoint`, `client_id`, engine/model ID, direct-invoke URL, prompt envelope, or document bytes.
+- Template authoring, if required in DevPortal, is a localized tenant administration journey over `/api/v1/extraction-templates`; it is separate from document upload/execution.
+- Existing workflows that store `(client_id, my_template_endpoint)` are migration inputs. A bounded alias may resolve them during migration/cutover, but execution never calls `personal-template-backend` to discover fields.
+- Direct single/multiple-file invocation and document collections require confirmed consumers and their own migration decision; they are not silently projected into the workflow wizard.
+
+The canonical resource, definition schema, lifecycle, permissions, output paths, and migration rules are defined in [`extraction-templates-v1.md`](extraction-templates-v1.md).
+
 ## Upload and execution compatibility
 
 The current demo page sends document bytes as base64 JSON:
@@ -380,6 +393,7 @@ Before Phase 3 implementation, capture and sanitize production-equivalent fixtur
 7. Direct invocation with and without review, plus the returned `review_full_url` shape.
 8. Review list and duplicate approval behavior.
 9. Every current consumer of public `endpoint_url`, `/workflow/custom`, and backend-only review-item endpoints.
+10. Custom-template endpoint groups, mutable field definitions, real authoring clients, direct single/multiple-file invocation, and document-collection callers.
 
 Contract tests should assert the direct DevPortal/engine contract separately from legacy migration parsing. Legacy field names should appear only in migration fixtures and adapter code.
 
@@ -389,6 +403,7 @@ Contract tests should assert the direct DevPortal/engine contract separately fro
 | ------------------------------ | ------------------------------------------------------------------------------------------------------------------ |
 | `services/workflow.service.js` | Send bearer authentication, remove `x-client-id`, and add upload/execution calls                                   |
 | Create/Edit Step One           | Obtain extraction profiles from a catalog rather than a hard-coded service UUID allowlist                          |
+| Template administration        | If product-required, add localized CRUD/version/archive screens over canonical templates; never direct invoke      |
 | Create/Edit Step Two           | Render generic entry/destination connector descriptors and schemas; remove Google/n8n-specific state               |
 | Create/Edit Step Three         | Summarize connector intent and submit the canonical definition without `payload_version` or mutable `nodes`        |
 | Edit route                     | Treat workflow identifier as an opaque string                                                                      |
@@ -415,6 +430,7 @@ This inventory does not close Phase 0B. The following items still block later ph
 7. Confirm the Microsoft product, action, connection, and schema values required by [`dynamics-destination-v1.md`](dynamics-destination-v1.md).
 8. Confirm connection secret ownership and OAuth callback ingress in the existing platform.
 9. Confirm the product/platform values required by [`workflow-provisioning-v1.md`](workflow-provisioning-v1.md).
+10. Confirm the deployed `personal-template-backend` revision, real authoring client, direct-invoke/collection callers, tenant mapping, and output semantics required by [`extraction-templates-v1.md`](extraction-templates-v1.md).
 
 ## Acceptance criteria for this contract slice
 
@@ -422,5 +438,5 @@ This inventory does not close Phase 0B. The following items still block later ph
 - Stable user intent is separated from legacy n8n/Google fields.
 - The direct DevPortal-to-engine boundary and required localized UI changes are explicit.
 - Direct upload and SharePoint entry converge on a common staged-document execution path.
-- Authentication, opaque identifier, payload v1/v2, and review risks are recorded.
+- Authentication, opaque identifier, payload v1/v2, custom-template, and review risks are recorded.
 - Remaining production evidence is listed rather than assumed.

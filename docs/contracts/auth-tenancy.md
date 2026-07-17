@@ -167,6 +167,10 @@ External platform roles/scopes map into these initial engine permissions:
 | `aiflow.connection.read`      | Read safe connection metadata/status                                   |
 | `aiflow.connection.write`     | Create/update/delete connections                                       |
 | `aiflow.connection.authorize` | Start provider authorization/consent sessions                          |
+| `aiflow.template.read`        | List/read/select authorized custom extraction templates and versions   |
+| `aiflow.template.create`      | Create a tenant custom extraction template and its first version       |
+| `aiflow.template.update`      | Edit template metadata or create a new immutable template version      |
+| `aiflow.template.archive`     | Remove a template from new workflow selection                          |
 | `aiflow.execution.read`       | Read documents/executions and failure details                          |
 | `aiflow.execution.retry`      | Request a guarded execution retry                                      |
 | `aiflow.review.read`          | Read assigned/authorized review tasks                                  |
@@ -191,6 +195,15 @@ The current `app-user` role may map to an agreed user permission set, but engine
 - Workflow definitions may reference only a connection owned by the same tenant and supported by the selected connector.
 - Safe list/get responses never contain provider tokens, client secrets, encrypted blobs, or secret-manager paths.
 - Deletion checks workflow references and permission before changing provider or local state.
+
+### Custom extraction templates
+
+- Templates are tenant-owned reusable configuration. They may be selected only by workflows in the same tenant and projects the caller is authorized to manage.
+- List/detail/create/version/archive operations require the matching canonical template permission; template permissions do not imply project workflow access.
+- Workflow-version creation requires project/workflow authorization plus `aiflow.template.read` and freezes the exact immutable custom profile version.
+- Template ownership never comes from a body/path `client_id`, email, legacy endpoint UUID, customer row, or database `superuser` flag.
+- Cross-tenant template/version lookup returns the same absence response as an unknown ID.
+- Exact resource, confidentiality, and migration behavior follows [`extraction-templates-v1.md`](extraction-templates-v1.md).
 
 ### Upload sessions, documents, and executions
 

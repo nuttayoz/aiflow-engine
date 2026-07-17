@@ -59,6 +59,7 @@ Progress:
 - Workflow provisioning v1 activation API, operation lifecycle, connector capability modes, atomic version replacement, deactivation, and recovery: [`contracts/workflow-provisioning-v1.md`](contracts/workflow-provisioning-v1.md).
 - Microsoft SharePoint entry v1 connection/permission boundary, shared drive watch, callback, delta inventory, Graph-to-S3 ingestion, renewal, handover, and scaling: [`contracts/sharepoint-entry-v1.md`](contracts/sharepoint-entry-v1.md).
 - Human review v1 engine-owned task/decision state, DevPortal content and direct-S3 preview, Review System adapter requirements, idempotent execution resumption, expiry, and cleanup: [`contracts/review-v1.md`](contracts/review-v1.md).
+- Custom extraction templates v1 tenant-owned authoring, immutable profile versions, deterministic output schema, workflow freeze, legacy migration, and no-direct-invoke boundary: [`contracts/extraction-templates-v1.md`](contracts/extraction-templates-v1.md).
 
 Required decisions:
 
@@ -71,8 +72,9 @@ Required decisions:
 7. Confirm the operation UX, limits, connector-version support, cleanup, and archive values required by [`contracts/workflow-provisioning-v1.md`](contracts/workflow-provisioning-v1.md).
 8. Confirm the identity/permission, product limits, callback/network, timing, retention, and UX values required by [`contracts/sharepoint-entry-v1.md`](contracts/sharepoint-entry-v1.md).
 9. Confirm the product, authorization, existing Review System, browser access, callback, feedback/signature, retention, and cutover values required by [`contracts/review-v1.md`](contracts/review-v1.md).
-10. Existing DevPortal endpoints, request/response shapes, and workflow payloads that the compatibility layer must preserve.
-11. Initial retention, file-size, page-count, throughput, availability, and latency targets.
+10. Confirm the deployed template service, tenant/permission model, output semantics, provider mapping, direct-invoke/collection consumers, authoring UI, migration, and cutover values required by [`contracts/extraction-templates-v1.md`](contracts/extraction-templates-v1.md).
+11. Existing DevPortal endpoints, request/response shapes, and workflow payloads that the compatibility layer must preserve.
+12. Initial retention, file-size, page-count, throughput, availability, and latency targets.
 
 Deliverables:
 
@@ -87,6 +89,7 @@ Deliverables:
 - Initial n8n-free workflow activation, connector provisioning, version cutover, deactivation, and recovery proposal: [`contracts/workflow-provisioning-v1.md`](contracts/workflow-provisioning-v1.md).
 - Initial SharePoint Online connection, subscription, callback, delta, ingestion, renewal, recovery, and scaling proposal: [`contracts/sharepoint-entry-v1.md`](contracts/sharepoint-entry-v1.md).
 - Initial human-review task, artifact, presentation, decision, expiry, retry, cleanup, and DevPortal compatibility proposal: [`contracts/review-v1.md`](contracts/review-v1.md).
+- Initial custom extraction-template authoring, immutable profile projection, output schema, workflow binding, migration, and compatibility proposal: [`contracts/extraction-templates-v1.md`](contracts/extraction-templates-v1.md).
 - Compatibility inventory for the existing DevPortal and `devportal-backend`.
 
 Exit criteria:
@@ -94,6 +97,7 @@ Exit criteria:
 - Phase 1 has no unresolved PostgreSQL, RabbitMQ, S3, authentication, or tenancy dependency.
 - Phase 2 has documented OCR and Dynamics integration contracts.
 - Legacy UI compatibility requirements are listed rather than inferred during implementation.
+- Template authoring/invocation/collection consumers and deployed behavior are inventoried rather than inferred from the stale default branch.
 
 ## Phase 1: reliable engine foundation
 
@@ -103,7 +107,7 @@ Implementation order:
 
 1. Configuration, secret references, tenant context, correlation identifiers, and structured logging.
 2. PostgreSQL connection, migrations, module-owned repositories, and health checks.
-3. Workflow, workflow-version, activation-operation, document, execution, stage-attempt, idempotency, inbox, and outbox records.
+3. Workflow, workflow-version, frozen extraction-profile reference, activation-operation, document, execution, stage-attempt, idempotency, inbox, and outbox records.
 4. Explicit execution state machine and transition guards.
 5. RabbitMQ connection lifecycle, topology declaration, publisher confirms, manual acknowledgements, retries, and DLQs.
 6. Transactional outbox publisher and inbox deduplication.
@@ -213,7 +217,11 @@ Purpose: absorb the remaining template and human-review responsibilities from th
 
 Scope:
 
-- Migrate personal-template ownership into the template module.
+- Implement tenant-owned custom extraction templates and immutable versions in `packages/templates` according to [`contracts/extraction-templates-v1.md`](contracts/extraction-templates-v1.md).
+- Project each custom template/version through the existing extraction-profile catalog and freeze the exact profile version/output schema in workflow versions.
+- Migrate required personal-template definitions and workflow endpoint references without live runtime lookups.
+- Keep documents on the normal upload/connector -> S3 -> execution -> extraction path; do not add a template `/invoke` API.
+- Migrate, redirect, reassign, or visibly block retirement for every confirmed direct single/multiple-file or document-collection consumer under an approved separate contract.
 - Implement the review-required workflow policy and engine-owned review task state defined by [`contracts/review-v1.md`](contracts/review-v1.md).
 - Reuse the existing DevPortal review list/page with opaque task IDs, bounded engine content, and direct-S3 source preview.
 - Integrate the existing Review System through a presentation adapter only after its production eligibility is proven; otherwise use engine-native presentation behind the same DevPortal page.
@@ -223,12 +231,16 @@ Scope:
 
 Exit criteria:
 
+- Template create/version/archive is tenant-isolated, idempotent, bounded, and never accepts document bytes or provider/model endpoints.
+- Workflow versions freeze immutable custom profile versions; template edits cannot change active or historical executions.
+- Migrated field/table definitions and output paths pass representative compatibility fixtures without a runtime call to `personal-template-backend`.
+- Every confirmed direct-invoke, customer/engine-admin, and collection caller has an approved migration/owner; unresolved callers visibly block legacy service retirement.
 - Review waiting occupies no worker slot or RabbitMQ delivery.
 - Duplicate decisions/callbacks and concurrent approve/reject races cannot resume an execution twice.
 - Source documents preview directly from exact-version S3 and review content/capabilities never enter lists, messages, logs, or PostgreSQL.
 - Delivery after approval uses the exact immutable approved artifact and stable destination effect identity.
 - DevPortal compatibility tests cover list, view, approve, reject, expiry, conflict, and navigation without legacy tokens or trusted headers.
-- Template behavior needed by migrated workflows is covered by compatibility tests.
+- Template behavior needed by migrated workflows is covered by compatibility tests, including ambiguous/colliding definitions that must fail migration visibly.
 - Retention and deletion jobs are auditable, retryable, and reconciled against S3 and supported provider copies.
 
 ## Phase 6: migration, cutover, and retirement

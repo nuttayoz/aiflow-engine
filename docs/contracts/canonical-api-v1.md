@@ -19,13 +19,14 @@ The machine-readable workflow-definition envelope is [`schemas/workflow-definiti
 
 ## Version terminology
 
-Three versions have different purposes:
+Four versions have different purposes:
 
-| Term                      | Example                       | Meaning                                                 |
-| ------------------------- | ----------------------------- | ------------------------------------------------------- |
-| HTTP API version          | `/api/v1`                     | Version of paths, request bodies, responses, and errors |
-| Definition schema version | `definition.schemaVersion: 1` | Shape of the provider-neutral workflow definition       |
-| Workflow version          | `versionNumber: 3`            | Third immutable configuration revision of one workflow  |
+| Term                       | Example                       | Meaning                                                                |
+| -------------------------- | ----------------------------- | ---------------------------------------------------------------------- |
+| HTTP API version           | `/api/v1`                     | Version of paths, request bodies, responses, and errors                |
+| Definition schema version  | `definition.schemaVersion: 1` | Shape of the provider-neutral workflow definition                      |
+| Workflow version           | `versionNumber: 3`            | Third immutable configuration revision of one workflow                 |
+| Extraction profile version | `profileVersionId`            | Exact immutable extraction behavior/output schema the workflow freezes |
 
 Changing a workflow creates a new workflow version. It does not change the HTTP API version or reuse the legacy `payload_version` concept.
 
@@ -63,6 +64,7 @@ The normalized security model is defined in [`auth-tenancy.md`](auth-tenancy.md)
 | `ConnectorDescriptor`   | Entry/destination capabilities, display metadata, connection requirements, and configuration schema |
 | `Connection`            | Tenant-scoped reference to an authorized external system; secret material is never returned         |
 | `ExtractionProfile`     | Available extraction provider capability and output-field schema                                    |
+| `ExtractionTemplate`    | Tenant-authored, immutable-version source of one custom extraction profile                          |
 | `UploadSession`         | Authorized direct-to-S3 upload plan and completion boundary                                         |
 | `Document`              | Immutable staged object metadata and source identity                                                |
 | `Execution`             | One durable end-to-end run through the workflow state machine                                       |
@@ -105,6 +107,8 @@ The stable definition envelope contains five processing concerns:
 ```
 
 The envelope is vendor-neutral. `entry.config`, `extraction.config`, and `destination.config` are validated against the selected descriptor/profile schema. Display labels and icons come from catalogs and are not duplicated as authoritative workflow data.
+
+On workflow-version creation, the server resolves `extraction.profileId` to one exact installed `profileVersionId` and output-schema hash. Version detail responses expose those safe resolved references beside the original definition. An execution uses the frozen references and never resolves a mutable catalog “latest” value.
 
 When `reviewPolicy.required` is `true`, `expiresAfterSeconds` is mandatory and must be between 60 seconds and 30 days. It is omitted when review is not required. Review occurs after mapping and follows [`review-v1.md`](review-v1.md).
 
@@ -298,6 +302,21 @@ Deactivation is idempotent. It closes local intake immediately, cleans managed c
 
 Connection responses never expose refresh tokens, client secrets, encrypted provider blobs, presigned URLs, or raw secret-manager references.
 
+### Custom extraction-template endpoints
+
+| Method and path                                                    | Purpose                                          |
+| ------------------------------------------------------------------ | ------------------------------------------------ |
+| `POST /api/v1/extraction-templates`                                | Create a tenant template and immutable version 1 |
+| `GET /api/v1/extraction-templates`                                 | Cursor-list authorized active/archived templates |
+| `GET /api/v1/extraction-templates/:templateId`                     | Get safe metadata and current-version summary    |
+| `PATCH /api/v1/extraction-templates/:templateId`                   | Change bounded display metadata only             |
+| `POST /api/v1/extraction-templates/:templateId/versions`           | Create the next immutable definition version     |
+| `GET /api/v1/extraction-templates/:templateId/versions`            | Cursor-list immutable version summaries          |
+| `GET /api/v1/extraction-templates/:templateId/versions/:versionId` | Get one definition and compiled output schema    |
+| `DELETE /api/v1/extraction-templates/:templateId`                  | Archive the template from new profile selection  |
+
+A custom template projects as an `ExtractionProfile`: its `templateId` is the stable custom `profileId`, and its immutable template-version ID is the `profileVersionId` frozen by a workflow version. Documents never enter these endpoints, and there is no canonical template `/invoke` endpoint. Exact definition, authorization, lifecycle, provider, migration, and compatibility behavior follows [`extraction-templates-v1.md`](extraction-templates-v1.md).
+
 ## Upload and execution endpoints
 
 | Method and path                                                                       | Purpose                                                               |
@@ -440,9 +459,10 @@ The migration records source identifiers for audit and endpoint redirection, but
 3. SharePoint subscription, resource-selection, delta, and permission schemas.
 4. Existing Review System adapter and artifact ownership.
 5. Confirm the provider and initial profile/schema values required by [`ocr-v1.md`](ocr-v1.md).
-6. Confirm the product/platform values required by [`workflow-provisioning-v1.md`](workflow-provisioning-v1.md).
-7. Product/platform confirmation of the proposed file size, multipart threshold, checksum algorithm/type, upload expiry, and retention in [`storage-v1.md`](storage-v1.md).
-8. Cursor format, default/max page size, and retention visibility.
-9. Whether workflow deletion is archive-only or supports later hard deletion.
+6. Confirm the custom-template semantics, provider mapping, consumers, and migration inputs required by [`extraction-templates-v1.md`](extraction-templates-v1.md).
+7. Confirm the product/platform values required by [`workflow-provisioning-v1.md`](workflow-provisioning-v1.md).
+8. Product/platform confirmation of the proposed file size, multipart threshold, checksum algorithm/type, upload expiry, and retention in [`storage-v1.md`](storage-v1.md).
+9. Cursor format, default/max page size, and retention visibility.
+10. Whether workflow deletion is archive-only or supports later hard deletion.
 
 These open items may refine connector schemas and lifecycle responses. They must not reintroduce provider-specific fields into the definition envelope.

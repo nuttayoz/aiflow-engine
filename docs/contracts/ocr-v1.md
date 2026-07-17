@@ -53,6 +53,8 @@ The public workflow definition continues to contain `extraction.profileId` and b
 
 Provider model names, endpoints, account IDs, credentials, and callback secrets are not exposed through the profile API. The profile output schema—not a provider response—is the contract used by mappings and the temporary demo UI.
 
+Tenant-authored custom profiles are defined by [`extraction-templates-v1.md`](extraction-templates-v1.md). A custom template ID projects as its stable `profileId`, and its immutable template-version ID projects as `profileVersionId`. The extract worker receives the same frozen profile/schema boundary; it never performs a live template lookup or accepts a legacy endpoint/model from an execution request.
+
 ## Application port
 
 The initial application boundary needs only these behaviors:

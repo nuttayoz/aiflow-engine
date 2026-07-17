@@ -37,20 +37,21 @@ The runtime application identity can read and write approved `aiflow` tables but
 
 The package named below owns the business meaning and repository contract. Physical TypeORM code remains in the database adapter so domain packages do not import TypeORM.
 
-| Logical owner | Initial tables                                                                                         | Purpose                                                                                           |
-| ------------- | ------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------- |
-| `workflows`   | `workflows`, `workflow_versions`, `workflow_version_connection_refs`, `workflow_activation_operations` | Stable workflow identity, immutable definitions, durable activation, and connection references    |
-| `connections` | `connections`                                                                                          | Tenant-owned safe provider configuration and external secret reference                            |
-| `storage`     | `storage_objects`                                                                                      | Provider-neutral object location, exact version, checksum, status, retention, and deletion intent |
-| `documents`   | `documents`                                                                                            | Immutable source identity and accepted source-storage reference                                   |
-| `executions`  | `executions`, `execution_stages`, `stage_attempts`, `delivery_operations`                              | Provider-neutral lifecycle, attempts, waits, outputs, destination effects, and receipts           |
-| `extraction`  | `extraction_requests`, `extraction_callback_events`                                                    | External extraction operation, reconciliation, callback deduplication, and provider cleanup       |
-| `review`      | `review_tasks`, optional `review_callback_events`                                                      | Human decision, presentation reconciliation, callback deduplication, and provider cleanup         |
-| `core`        | `idempotency_records`, `audit_events`                                                                  | Boundary idempotency and append-only audit facts shared by use cases                              |
-| `messaging`   | `outbox_messages`, `inbox_messages`                                                                    | Atomic publication intent and logical-consumer deduplication                                      |
-| `database`    | `scheduler_leases`, `typeorm_migrations`                                                               | Global job leadership and schema history                                                          |
+| Logical owner | Initial tables                                                                                                                          | Purpose                                                                                                                              |
+| ------------- | --------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `workflows`   | `workflows`, `workflow_versions`, `workflow_version_connection_refs`, `workflow_version_profile_refs`, `workflow_activation_operations` | Stable workflow identity, immutable definitions, durable activation, connection references, and frozen extraction-profile references |
+| `connections` | `connections`                                                                                                                           | Tenant-owned safe provider configuration and external secret reference                                                               |
+| `templates`   | `extraction_templates`, `extraction_template_versions`                                                                                  | Tenant-owned custom extraction-profile authoring and immutable versions                                                              |
+| `storage`     | `storage_objects`                                                                                                                       | Provider-neutral object location, exact version, checksum, status, retention, and deletion intent                                    |
+| `documents`   | `documents`                                                                                                                             | Immutable source identity and accepted source-storage reference                                                                      |
+| `executions`  | `executions`, `execution_stages`, `stage_attempts`, `delivery_operations`                                                               | Provider-neutral lifecycle, attempts, waits, outputs, destination effects, and receipts                                              |
+| `extraction`  | `extraction_requests`, `extraction_callback_events`                                                                                     | External extraction operation, reconciliation, callback deduplication, and provider cleanup                                          |
+| `review`      | `review_tasks`, optional `review_callback_events`                                                                                       | Human decision, presentation reconciliation, callback deduplication, and provider cleanup                                            |
+| `core`        | `idempotency_records`, `audit_events`                                                                                                   | Boundary idempotency and append-only audit facts shared by use cases                                                                 |
+| `messaging`   | `outbox_messages`, `inbox_messages`                                                                                                     | Atomic publication intent and logical-consumer deduplication                                                                         |
+| `database`    | `scheduler_leases`, `typeorm_migrations`                                                                                                | Global job leadership and schema history                                                                                             |
 
-Future phases add tables only when their feature arrives. Phase 4 adds provider-neutral `document_ingestions` and `connector_provisioning_bindings`, plus adapter-owned SharePoint watch, item-inventory, and notification-event records defined by [`sharepoint-entry-v1.md`](sharepoint-entry-v1.md). Phase 5 adds `review_tasks` and adds `review_callback_events` only when provider callbacks are enabled, as defined by [`review-v1.md`](review-v1.md). Provider-specific fields remain inside validated connector configuration or connector-owned records; they do not become columns on `executions`.
+Future phases add tables only when their feature arrives. Phase 4 adds provider-neutral `document_ingestions` and `connector_provisioning_bindings`, plus adapter-owned SharePoint watch, item-inventory, and notification-event records defined by [`sharepoint-entry-v1.md`](sharepoint-entry-v1.md). Phase 5 adds `extraction_templates` and `extraction_template_versions`, then permits the existing `workflow_version_profile_refs` projection to reference a custom template version as defined by [`extraction-templates-v1.md`](extraction-templates-v1.md). It also adds `review_tasks` and adds `review_callback_events` only when provider callbacks are enabled, as defined by [`review-v1.md`](review-v1.md). Provider-specific fields remain inside validated connector configuration or connector-owned records; they do not become columns on `executions`.
 
 The extraction and delivery-operation tables are Phase 2 additions. Their ownership is fixed here so provider contracts are unambiguous; Phase 1 does not create unused provider tables.
 
@@ -62,6 +63,8 @@ No module writes another module's table directly. A cross-module change is perfo
 workflows
   -> workflow_versions
        -> workflow_version_connection_refs -> connections
+       -> workflow_version_profile_refs
+            -> extraction_template_versions -> extraction_templates (for CUSTOM profiles)
   -> workflow_activation_operations -> target workflow_version
 
 documents
@@ -140,6 +143,8 @@ Rules:
 
 `workflow_version_connection_refs` is a relational projection of connection IDs contained in the validated definition. It identifies the reference purpose and prevents a connection from being silently deleted while a workflow version depends on it. The JSON definition remains canonical; the projection is rebuilt and verified in the same creation transaction.
 
+`workflow_version_profile_refs` is the relational projection of the exact extraction `profileId`, immutable `profileVersionId`, kind, schema hash, and optional custom-template-version foreign key selected for the workflow version. It prevents execution-time “latest profile” resolution and protects a referenced custom template version from deletion. The JSON definition remains the caller-facing source; the frozen projection is created and verified in the same transaction.
+
 `workflow_activation_operations` stores one durable activation/deactivation request: target/previous version, immutable definition/capability hashes, guarded operation step/status, attempt/lease/retry/reconciliation timing, safe failure, actor/correlation context, and timestamps.
 
 Rules:
@@ -162,6 +167,23 @@ Rules:
 - Connector ID and configuration-schema version are explicit.
 - A workflow version can reference only a connection from the same tenant and compatible connector.
 - Deletion is blocked while a retained workflow version or in-flight operation requires the connection. Disable/revoke state is preferred to destructive deletion.
+
+### Custom extraction templates and versions
+
+`extraction_templates` stores stable tenant ownership, bounded display metadata, `ACTIVE`/`ARCHIVED` state, optimistic `state_version`, and the current immutable version pointer.
+
+`extraction_template_versions` stores a template-local version number, definition schema version, bounded validated definition JSONB, deterministic compiled output schema, hashes, an immutable behavior fingerprint, safe processor-policy reference, compatibility state, and author/correlation metadata.
+
+Rules:
+
+- `(tenant_id, extraction_template_id, version_number)` is unique and every current-version/reference relationship is tenant-scoped.
+- `(tenant_id, extraction_template_id, version_fingerprint)` is unique so identical definition/schema/processor behavior does not create duplicate versions.
+- Version rows are immutable. Definition edits insert a new row and atomically advance the stable template pointer.
+- A workflow version freezes one exact custom template/profile version through `workflow_version_profile_refs`; it never resolves the template's current pointer while executing.
+- Archive prevents new selection but does not invalidate retained workflow versions or accepted executions.
+- Foreign-key deletion is `RESTRICT` while workflow versions, executions, retries, or audit retention require the version.
+- Rows never contain documents, extracted values, provider payloads, model credentials, customer profile data, or arbitrary provider URLs.
+- Exact authoring, output compilation, migration, and confidentiality rules follow [`extraction-templates-v1.md`](extraction-templates-v1.md).
 
 ### Documents
 
@@ -339,6 +361,9 @@ Initial migrations add indexes only for known contract queries:
 | ----------------------------- | -------------------------------------------------------------------------- |
 | Project workflow list         | `(tenant_id, project_id, created_at, id)`                                  |
 | Workflow version history      | `(tenant_id, workflow_id, version_number)`                                 |
+| Tenant template list          | `(tenant_id, status, created_at, id)`                                      |
+| Template version history      | `(tenant_id, extraction_template_id, version_number)`                      |
+| Exact custom profile version  | tenant-scoped unique profile/version identity and custom-version reference |
 | Current/due provisioning      | Partial `(status, next_attempt_at, id)` and `(lease_expires_at, id)` paths |
 | Workflow execution list       | `(tenant_id, workflow_id, created_at, id)`                                 |
 | Workflow review-task list     | `(tenant_id, workflow_id, created_at, id)`                                 |
@@ -411,24 +436,25 @@ The migration suite must prove:
 
 These initial values inherit the proposed engineering envelope and require product/platform confirmation:
 
-| Record                           | Initial retention rule                                                 |
-| -------------------------------- | ---------------------------------------------------------------------- |
-| Active workflows/connections     | Retain while active or referenced                                      |
-| Archived workflow versions       | Retain at least as long as referencing executions/audit facts          |
-| Workflow activation operations   | Same workflow/audit lifetime; unresolved cleanup never auto-expires    |
-| Documents and execution metadata | 1 year after terminal execution, subject to object-deletion policy     |
-| Execution stages and attempts    | Same lifetime as their execution                                       |
-| Extraction requests              | Same lifetime as their execution; provider copies follow OCR policy    |
-| Extraction callback events       | 90 days and never shorter than provider callback replay policy         |
-| Review tasks                     | Same lifetime as their execution; provider copies follow review policy |
-| Review callback events           | 90 days and never shorter than provider callback replay policy         |
-| Delivery operations/receipts     | Same lifetime as root execution; longer only by financial policy       |
-| Audit events                     | 1 year                                                                 |
-| Idempotency records              | 90 days and never shorter than the accepted external replay window     |
-| Inbox records                    | 90 days and never shorter than broker/DLQ replay policy                |
-| Confirmed outbox rows            | 30 days after `published_at`                                           |
-| Unpublished outbox rows          | Never expire automatically                                             |
-| Scheduler leases                 | Current row retained; obsolete job rows removed explicitly             |
+| Record                           | Initial retention rule                                                            |
+| -------------------------------- | --------------------------------------------------------------------------------- |
+| Active workflows/connections     | Retain while active or referenced                                                 |
+| Extraction templates/versions    | Retain while active/referenced; archived versions follow workflow/audit retention |
+| Archived workflow versions       | Retain at least as long as referencing executions/audit facts                     |
+| Workflow activation operations   | Same workflow/audit lifetime; unresolved cleanup never auto-expires               |
+| Documents and execution metadata | 1 year after terminal execution, subject to object-deletion policy                |
+| Execution stages and attempts    | Same lifetime as their execution                                                  |
+| Extraction requests              | Same lifetime as their execution; provider copies follow OCR policy               |
+| Extraction callback events       | 90 days and never shorter than provider callback replay policy                    |
+| Review tasks                     | Same lifetime as their execution; provider copies follow review policy            |
+| Review callback events           | 90 days and never shorter than provider callback replay policy                    |
+| Delivery operations/receipts     | Same lifetime as root execution; longer only by financial policy                  |
+| Audit events                     | 1 year                                                                            |
+| Idempotency records              | 90 days and never shorter than the accepted external replay window                |
+| Inbox records                    | 90 days and never shorter than broker/DLQ replay policy                           |
+| Confirmed outbox rows            | 30 days after `published_at`                                                      |
+| Unpublished outbox rows          | Never expire automatically                                                        |
+| Scheduler leases                 | Current row retained; obsolete job rows removed explicitly                        |
 
 Retention cleanup uses small ordered batches, explicit dependency order, and metrics. It does not issue broad unbounded deletes. A failed S3 deletion keeps document deletion intent and is retried/reconciled; database metadata is not removed first.
 

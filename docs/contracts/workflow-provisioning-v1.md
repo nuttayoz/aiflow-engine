@@ -32,6 +32,7 @@ Evidence was inspected at:
 - AiFlow Engine owns workflow versions, activation state, provisioning operations, connector bindings, and audit history.
 - A workflow version is immutable. Editing creates a new version; activation never edits a definition.
 - Version creation performs deterministic schema/reference validation. Activation reauthorizes and performs current connection/resource/provider checks.
+- Version creation resolves a selected custom extraction profile to one exact immutable template/profile version and output-schema hash. Execution never resolves the template's current version.
 - A newly accepted activation, or a deactivation requiring managed cleanup, is a durable operation. Provider calls never keep the API request or a database transaction open.
 - PostgreSQL is authoritative. RabbitMQ only wakes a worker after the operation and outbox command commit together.
 - At most one non-terminal provisioning operation exists per workflow.
@@ -97,8 +98,8 @@ Creating a version validates without provider writes:
 
 1. definition envelope and connector-owned schemas;
 2. tenant/project ownership and referenced connection ownership;
-3. installed connector, action, extraction-profile, and schema versions;
-4. mapping source/target paths and the bounded review policy defined by [`review-v1.md`](review-v1.md);
+3. installed connector, action, extraction-profile, and schema versions, including exact custom profile-version resolution defined by [`extraction-templates-v1.md`](extraction-templates-v1.md);
+4. mapping source/target paths against that frozen profile schema and the bounded review policy defined by [`review-v1.md`](review-v1.md);
 5. bounded values and forbidden secret/URL fields;
 6. the relational connection-reference projection and definition hash.
 
@@ -110,7 +111,7 @@ Activation reauthorizes the project and every referenced connection, then verifi
 
 1. version belongs to the requested workflow/tenant/project and remains supported;
 2. connector modules and exact capability/schema versions are installed;
-3. extraction profile and destination action remain available;
+3. the exact frozen extraction profile version, custom template version when applicable, output-schema hash, and destination action remain installed, supported, and permitted;
 4. connections are authorized, enabled, unexpired, and compatible;
 5. selected companies/sites/drives/folders/resources still exist and are accessible;
 6. required permissions, custom endpoints/extensions, quotas, and provider capabilities are present;
@@ -358,6 +359,7 @@ Alerts cover stuck operations, reconciliation deadline, unresolved provider effe
 11. Cleanup/renewal failures are durable, visible, bounded, and operator-recoverable.
 12. No provisioning path creates n8n resources, per-workflow infrastructure, or sends document/business data through RabbitMQ/PostgreSQL.
 13. The demo UI can create, activate, poll, replace, deactivate, and display safe failures using only canonical APIs.
+14. A custom template edit cannot change an existing workflow version; activation and execution load the frozen custom profile version without a live template-service lookup.
 
 ## Product and platform confirmations still required
 
