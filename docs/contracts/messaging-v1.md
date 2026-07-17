@@ -82,7 +82,7 @@ The envelope schema validates common metadata. Each message type has a separate 
 | `aiflow.extraction.provider-copy.delete.requested.v1`                  | `extractionRequestId`, `expectedStateVersion`                          | Delete/confirm one supported provider-side OCR copy     |
 | `aiflow.workflow.provisioning.requested.v1`                            | `provisioningOperationId`, `expectedStateVersion`                      | Validate/provision/reconcile one workflow operation     |
 
-Messages carry only lookup identifiers and concurrency guards. Workers load workflow configuration, connection references, object keys, retry policy, and provider state through tenant-scoped repositories.
+Messages carry only lookup identifiers and concurrency guards. Workers load workflow configuration, the frozen extraction profile version, connection references, object keys, retry policy, and provider state through tenant-scoped repositories. Template authoring adds no queue or message type; definitions and prompts never enter RabbitMQ.
 
 New providers add connector-specific message types and bindings. They do not add provider fields to core execution commands.
 

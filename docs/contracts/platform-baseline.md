@@ -17,15 +17,15 @@ Local Docker Compose files and legacy application manifests are migration eviden
 
 The 2026-07-16 workspace snapshot contains application repositories but no production platform/IaC repository. The following revisions were inspected without reading `.env` files or secret objects:
 
-| Repository                  | Revision       |
-| --------------------------- | -------------- |
-| `aiflow-trigger-handler`    | `7d5f9633af44` |
-| `aiflow-webhook-processor`  | `85d2d46e78fd` |
-| `aiflow-review-result`      | `e9b9e92d6e31` |
-| `personal-template-backend` | `829d37bed2dc` |
-| `n8n-service`               | `05e6c32cfe1c` |
-| `devportal-backend`         | `c546a2fdedf2` |
-| `devportal`                 | `2fc93d8ba136` |
+| Repository                  | Revision(s)                                                                                       |
+| --------------------------- | ------------------------------------------------------------------------------------------------- |
+| `aiflow-trigger-handler`    | `7d5f9633af44`                                                                                    |
+| `aiflow-webhook-processor`  | `85d2d46e78fd`                                                                                    |
+| `aiflow-review-result`      | `e9b9e92d6e31`                                                                                    |
+| `personal-template-backend` | main `829d37bed2dc`; develop `c68fb2130c46`; document collection `6c5d368715b3` (`dev-v0.1.9.11`) |
+| `n8n-service`               | `05e6c32cfe1c`                                                                                    |
+| `devportal-backend`         | `c546a2fdedf2`                                                                                    |
+| `devportal`                 | `2fc93d8ba136`                                                                                    |
 
 The engine version targets are defined by [ADR-0001](../decisions/0001-current-stable-versions.md), but the versions actually available from the operated platform, topology, backup guarantees, KEDA availability, S3/KMS/IAM conventions, and authentication claims cannot be proven from this workspace. They remain platform inputs rather than application assumptions.
 
@@ -46,15 +46,18 @@ The engine version targets are defined by [ADR-0001](../decisions/0001-current-s
 
 ## Legacy evidence and migration impact
 
-| Evidence                                                                                                                              | What it proves                                                                              | Target impact                                                                                                                                   |
-| ------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| `n8n-service/docker-compose.yml` and `devportal/docker-compose.yml` use `postgres:12-alpine`.                                         | PostgreSQL 12 was used for local legacy development.                                        | Do not infer the production version. Confirm the operated version before selecting migrations/features.                                         |
-| Legacy TypeScript services use `pg`/TypeORM and database environment variables; DevPortal uses Knex with a legacy pool of 2-10.       | The team has PostgreSQL experience and existing relational data.                            | Use TypeORM migrations, but create a new connection budget from actual cluster capacity and planned replica counts.                             |
-| Several legacy services expose `DB_SYNCHRONIZE`.                                                                                      | Legacy schemas could be auto-synchronized in some environments.                             | AiFlow Engine must keep TypeORM synchronization disabled everywhere and use reviewed migrations only.                                           |
-| No RabbitMQ/AMQP client or deployment configuration was found in the inspected repositories.                                          | RabbitMQ is a new integration for this engine even though the platform already operates it. | Obtain the broker contract from platform owners; do not copy a legacy queue pattern.                                                            |
-| Legacy AiFlow services use AWS SDK v3 with bucket/root-path variables and static access-key variables.                                | Existing flows already use S3 object storage.                                               | Keep AWS SDK v3, but replace static keys with EKS workload identity and secret references.                                                      |
-| DevPortal backend uses Keycloak protection and the frontend derives `x-client-id` from token `sub`.                                   | The legacy actor identifier is tied to `sub`; exact tenant/project claims are not visible.  | Validate the platform token and derive actor/tenant authorization from trusted claims/services. Never accept `x-client-id` as tenant authority. |
-| DevPortal backend has Kubernetes Deployments with two replicas, resource requests/limits, anti-affinity, and `secretKeyRef` examples. | Kubernetes application delivery patterns exist.                                             | Follow current platform conventions after obtaining the actual engine deployment template and service-account policy.                           |
+| Evidence                                                                                                                                                       | What it proves                                                                                              | Target impact                                                                                                                                   |
+| -------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| `n8n-service/docker-compose.yml` and `devportal/docker-compose.yml` use `postgres:12-alpine`.                                                                  | PostgreSQL 12 was used for local legacy development.                                                        | Do not infer the production version. Confirm the operated version before selecting migrations/features.                                         |
+| Legacy TypeScript services use `pg`/TypeORM and database environment variables; DevPortal uses Knex with a legacy pool of 2-10.                                | The team has PostgreSQL experience and existing relational data.                                            | Use TypeORM migrations, but create a new connection budget from actual cluster capacity and planned replica counts.                             |
+| Several legacy services expose `DB_SYNCHRONIZE`.                                                                                                               | Legacy schemas could be auto-synchronized in some environments.                                             | AiFlow Engine must keep TypeORM synchronization disabled everywhere and use reviewed migrations only.                                           |
+| No RabbitMQ/AMQP client or deployment configuration was found in the inspected repositories.                                                                   | RabbitMQ is a new integration for this engine even though the platform already operates it.                 | Obtain the broker contract from platform owners; do not copy a legacy queue pattern.                                                            |
+| Legacy AiFlow services use AWS SDK v3 with bucket/root-path variables and static access-key variables.                                                         | Existing flows already use S3 object storage.                                                               | Keep AWS SDK v3, but replace static keys with EKS workload identity and secret references.                                                      |
+| DevPortal backend uses Keycloak protection and the frontend derives `x-client-id` from token `sub`.                                                            | The legacy actor identifier is tied to `sub`; exact tenant/project claims are not visible.                  | Validate the platform token and derive actor/tenant authorization from trusted claims/services. Never accept `x-client-id` as tenant authority. |
+| DevPortal backend has Kubernetes Deployments with two replicas, resource requests/limits, anti-affinity, and `secretKeyRef` examples.                          | Kubernetes application delivery patterns exist.                                                             | Follow current platform conventions after obtaining the actual engine deployment template and service-account policy.                           |
+| `personal-template-backend` main is a create-only skeleton while develop contains v1/v2 CRUD/direct invocation and the feature branch adds collections.        | Repository default branch is not reliable evidence of deployed template behavior.                           | Confirm the deployed commit/tag, database, routes, callers, and collection use before writing migration tooling or retiring the service.        |
+| Runtime services pass a mutable template endpoint and fetch its fields during processing/review; develop accepts memory-buffered base64 multi-file invocation. | Current custom extraction behavior is mutable and can move large documents through application HTTP/memory. | Import definitions as immutable custom extraction-profile versions; keep documents on the normal S3-backed engine entry/execution path.         |
+| Template routes use client/customer identifiers and database privilege flags rather than a proven canonical bearer/tenant contract.                            | Legacy template ownership/authorization cannot be copied safely.                                            | Derive tenant/actor from platform identity, enforce tenant-scoped repositories, and migrate legacy clients through an owner-approved mapping.   |
 
 ## Security discovery
 
@@ -119,6 +122,17 @@ The Phase 0B bucket baseline, storage-object model, keys, checksums, upload/inge
 
 The Phase 0B provider capabilities, durable request/callback model, reconciliation, normalized artifact, quota, security, retention, and test boundary are defined in [`ocr-v1.md`](ocr-v1.md).
 
+### Custom extraction templates
+
+- Treat a personal template as tenant-owned authoring for a custom extraction profile, not as a workflow graph, provider endpoint, model catalog, or document invocation API.
+- Store immutable template/profile versions and deterministically compile their output schemas.
+- Freeze the exact custom profile version in each workflow version; workers never fetch a mutable “latest” definition during execution or review.
+- Keep provider/model selection server-owned behind the extraction adapter and keep document bytes on the existing S3-backed entry/execution path.
+- Do not add a template service, database, queue, Redis dependency, or per-template deployment.
+- Inventory direct invoke, collection, authoring, and admin callers before retirement; unconfirmed legacy behavior does not enter engine core.
+
+The Phase 0B authoring definition, APIs, permissions, persistence, workflow binding, migration, and compatibility boundary are defined in [`extraction-templates-v1.md`](extraction-templates-v1.md).
+
 ### Microsoft Dynamics destination
 
 - Treat Business Central online/on-premises and legacy Dynamics NAV as separately verified connector adapters.
@@ -171,39 +185,43 @@ Production measurements must replace assumptions about document size, pages, pro
 
 ## Required platform confirmations
 
-| ID           | Owner               | Confirmation required                                                                                         | Blocks                   |
-| ------------ | ------------------- | ------------------------------------------------------------------------------------------------------------- | ------------------------ |
-| `PG-01`      | Platform/DBA        | Confirm PostgreSQL 18.4 availability and supported extensions/features                                        | Migration implementation |
-| `PG-02`      | Platform/DBA        | Total engine connection budget and proxy/pooler convention                                                    | Replica and pool sizing  |
-| `PG-03`      | Platform/DBA        | TLS/CA, database/schema ownership, application and migration identities                                       | Database connection      |
-| `PG-04`      | Platform/DBA        | Migration execution/approval process, backups/PITR, confirmed RPO/RTO                                         | Phase 1 recovery proof   |
-| `RMQ-01`     | Platform            | Confirm RabbitMQ 4.3.2, node/AZ topology, quorum queue and policy support                                     | Queue topology           |
-| `RMQ-02`     | Platform            | TLS/CA, authentication, vhost naming, permissions, maximum message and queue policies                         | Broker connection        |
-| `RMQ-03`     | Platform            | KEDA availability or approved RabbitMQ-metrics/HPA alternative                                                | Worker autoscaling       |
-| `S3-01`      | Platform/Security   | AWS account/Region, bucket naming/ownership, versioning, Block Public Access, and infrastructure owner        | Storage adapter          |
-| `S3-02`      | Platform/Security   | KMS key/alias, key policy, S3 Bucket Key approval, rotation, and recovery behavior                            | Storage encryption       |
-| `S3-03`      | Platform/Security   | Pod Identity/IRSA roles, exact IAM/KMS actions including API checksum verification, and VPC/bucket policies   | Storage authentication   |
-| `S3-04`      | Platform/Security   | Browser origins, regional endpoint, CORS, signature-age cap, and gateway behavior                             | Direct upload            |
-| `S3-05`      | Platform/Security   | Lifecycle, noncurrent/delete-marker cleanup, inventory/audit logging, replication, and restore                | Retention and recovery   |
-| `AUTH-01`    | Auth team           | JWT versus opaque token; issuer/discovery/JWKS, audience, algorithms and token lifetime                       | Authentication guard     |
-| `AUTH-02`    | Auth/Product        | Exact actor, tenant, role/scope, token-ID and service-identity claims; multi-tenant selection                 | Tenant context           |
-| `AUTH-03`    | Auth/Platform       | Project authorization contract, service authentication, timeout and revocation behavior                       | Resource authorization   |
-| `OCR-01`     | Product/Platform    | Provider/product/API version, Regions, endpoints, authentication, sandbox, and support owner                  | OCR adapter              |
-| `OCR-02`     | Provider/Platform   | Submission idempotency/correlation, operation status/result, terminal states, and callback contract           | OCR reliability          |
-| `OCR-03`     | Provider/Security   | Quotas/limits/latency, retention/deletion, residency, subprocessors, training terms, and DPA                  | OCR production approval  |
-| `DYN-01`     | Product/Customer    | Product/version, hosting, tenant/environment/company, first action/entities, and sandbox                      | Dynamics adapter         |
-| `DYN-02`     | Customer/Platform   | API/custom extension route/version, effect-key uniqueness/lookup, atomicity, deployment, and upgrade owner    | Delivery reliability     |
-| `DYN-03`     | Security/Platform   | Entra consent/permissions/credentials or approved legacy auth; endpoint/TLS/private-network convention        | Dynamics authorization   |
-| `PROV-01`    | Product/Platform    | Operation polling UX, serialization, immediate deactivation, version replacement, cleanup, and archive policy | Provisioning behavior    |
-| `PROV-02`    | Connector/Platform  | Operation/provider deadlines, retry/admission limits, connector-version support, and managed-effect evidence  | Provisioning reliability |
-| `REVIEW-01`  | Product/Auth        | Review expiry default, reject UX, reviewer roles, and project authorization                                   | Review workflow freeze   |
-| `REVIEW-03`  | Review System owner | Exact deployed API/auth/schema/limits/errors/sandbox plus stable create lookup and callback contract          | Review adapter           |
-| `REVIEW-06`  | Product/Provider    | Signature/feedback consumers, provider-copy need, retention/deletion, and legacy URL/redirect cutover         | Review compatibility     |
-| `REVIEW-08`  | Platform/Security   | Review body limits, source-preview TTL/CORS/content disposition, rate limits, egress, and review owner        | Review security boundary |
-| `OPS-01`     | Platform            | Existing CI template, deployment values convention, secret manager, Sentry/metrics/trace endpoints            | Production delivery      |
-| `PRODUCT-01` | Product/Security    | File/page limits, types, malware controls, retention, availability, throughput, RPO and RTO targets           | Contract freeze          |
-| `PRODUCT-02` | Product             | Initial extraction profiles, immutable output schemas/paths, confidence/review rules, and result limit        | OCR profile freeze       |
-| `PRODUCT-03` | Product/Finance     | Destination schema/mappings, review/posting exclusions, receipt/correction behavior, and financial retention  | Dynamics action freeze   |
+| ID            | Owner               | Confirmation required                                                                                                  | Blocks                   |
+| ------------- | ------------------- | ---------------------------------------------------------------------------------------------------------------------- | ------------------------ |
+| `PG-01`       | Platform/DBA        | Confirm PostgreSQL 18.4 availability and supported extensions/features                                                 | Migration implementation |
+| `PG-02`       | Platform/DBA        | Total engine connection budget and proxy/pooler convention                                                             | Replica and pool sizing  |
+| `PG-03`       | Platform/DBA        | TLS/CA, database/schema ownership, application and migration identities                                                | Database connection      |
+| `PG-04`       | Platform/DBA        | Migration execution/approval process, backups/PITR, confirmed RPO/RTO                                                  | Phase 1 recovery proof   |
+| `RMQ-01`      | Platform            | Confirm RabbitMQ 4.3.2, node/AZ topology, quorum queue and policy support                                              | Queue topology           |
+| `RMQ-02`      | Platform            | TLS/CA, authentication, vhost naming, permissions, maximum message and queue policies                                  | Broker connection        |
+| `RMQ-03`      | Platform            | KEDA availability or approved RabbitMQ-metrics/HPA alternative                                                         | Worker autoscaling       |
+| `S3-01`       | Platform/Security   | AWS account/Region, bucket naming/ownership, versioning, Block Public Access, and infrastructure owner                 | Storage adapter          |
+| `S3-02`       | Platform/Security   | KMS key/alias, key policy, S3 Bucket Key approval, rotation, and recovery behavior                                     | Storage encryption       |
+| `S3-03`       | Platform/Security   | Pod Identity/IRSA roles, exact IAM/KMS actions including API checksum verification, and VPC/bucket policies            | Storage authentication   |
+| `S3-04`       | Platform/Security   | Browser origins, regional endpoint, CORS, signature-age cap, and gateway behavior                                      | Direct upload            |
+| `S3-05`       | Platform/Security   | Lifecycle, noncurrent/delete-marker cleanup, inventory/audit logging, replication, and restore                         | Retention and recovery   |
+| `AUTH-01`     | Auth team           | JWT versus opaque token; issuer/discovery/JWKS, audience, algorithms and token lifetime                                | Authentication guard     |
+| `AUTH-02`     | Auth/Product        | Exact actor, tenant, role/scope, token-ID and service-identity claims; multi-tenant selection                          | Tenant context           |
+| `AUTH-03`     | Auth/Platform       | Project authorization contract, service authentication, timeout and revocation behavior                                | Resource authorization   |
+| `OCR-01`      | Product/Platform    | Provider/product/API version, Regions, endpoints, authentication, sandbox, and support owner                           | OCR adapter              |
+| `OCR-02`      | Provider/Platform   | Submission idempotency/correlation, operation status/result, terminal states, and callback contract                    | OCR reliability          |
+| `OCR-03`      | Provider/Security   | Quotas/limits/latency, retention/deletion, residency, subprocessors, training terms, and DPA                           | OCR production approval  |
+| `DYN-01`      | Product/Customer    | Product/version, hosting, tenant/environment/company, first action/entities, and sandbox                               | Dynamics adapter         |
+| `DYN-02`      | Customer/Platform   | API/custom extension route/version, effect-key uniqueness/lookup, atomicity, deployment, and upgrade owner             | Delivery reliability     |
+| `DYN-03`      | Security/Platform   | Entra consent/permissions/credentials or approved legacy auth; endpoint/TLS/private-network convention                 | Dynamics authorization   |
+| `PROV-01`     | Product/Platform    | Operation polling UX, serialization, immediate deactivation, version replacement, cleanup, and archive policy          | Provisioning behavior    |
+| `PROV-02`     | Connector/Platform  | Operation/provider deadlines, retry/admission limits, connector-version support, and managed-effect evidence           | Provisioning reliability |
+| `REVIEW-01`   | Product/Auth        | Review expiry default, reject UX, reviewer roles, and project authorization                                            | Review workflow freeze   |
+| `REVIEW-03`   | Review System owner | Exact deployed API/auth/schema/limits/errors/sandbox plus stable create lookup and callback contract                   | Review adapter           |
+| `REVIEW-06`   | Product/Provider    | Signature/feedback consumers, provider-copy need, retention/deletion, and legacy URL/redirect cutover                  | Review compatibility     |
+| `REVIEW-08`   | Platform/Security   | Review body limits, source-preview TTL/CORS/content disposition, rate limits, egress, and review owner                 | Review security boundary |
+| `OPS-01`      | Platform            | Existing CI template, deployment values convention, secret manager, Sentry/metrics/trace endpoints                     | Production delivery      |
+| `PRODUCT-01`  | Product/Security    | File/page limits, types, malware controls, retention, availability, throughput, RPO and RTO targets                    | Contract freeze          |
+| `PRODUCT-02`  | Product             | Initial extraction profiles, immutable output schemas/paths, confidence/review rules, and result limit                 | OCR profile freeze       |
+| `PRODUCT-03`  | Product/Finance     | Destination schema/mappings, review/posting exclusions, receipt/correction behavior, and financial retention           | Dynamics action freeze   |
+| `TEMPLATE-01` | Product/Operations  | Deployed template revision/schema/routes/callers plus whether develop and document collections are production behavior | Template migration       |
+| `TEMPLATE-02` | Product/Auth        | Template role mapping, tenant/project reuse, canonical legacy-client mapping, and authoring UI owner                   | Template authorization   |
+| `TEMPLATE-03` | Product/OCR         | Field/question scope, table/missing behavior, limits, output fixtures, and legacy engine/model policy mapping          | Custom profile freeze    |
+| `TEMPLATE-04` | Product/Security    | Direct/multi-file invoke and collection disposition, prompt controls, retention, mutation freeze, and cutover          | Service retirement       |
 
 ## Phase decision
 
