@@ -51,15 +51,15 @@ AiFlow Engine owns the canonical API plus workflow truth, workflow versions, con
 
 ## Current user journeys
 
-| Journey               | Current UI route                                       | Current behavior                                                                 | Compatibility decision                                                                                              |
-| --------------------- | ------------------------------------------------------ | -------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| Project workflow list | `/aiFlow/project/:projectId`                           | Lists workflows, activation, endpoint, edit/delete, interact, and review actions | Preserve route and table layout; consume the canonical engine list response                                         |
-| Create                | `/aiFlow/create/project/:projectId`                    | Three-step wizard: identity/service, trigger/output/fields, summary              | Preserve three steps; replace Step Two contents with schema-driven entry and destination configuration              |
-| Edit                  | `/aiFlow/edit/project/:projectId/workflow/:workflowId` | Loads one workflow and reuses the three-step shape                               | Preserve route; make `workflowId` opaque instead of calling `parseInt`                                              |
-| Connections           | `/aiFlow/credentials`                                  | CRUD for Google OAuth credentials and consent                                    | Preserve page location; present generic engine connections and provider consent                                     |
-| Demo/upload           | `/aiFlow/:workflowId`                                  | Converts a file to base64 and posts it to `endpoint_url`                         | Preserve page; intentionally replace transport with upload session -> direct S3 -> completion -> execution status   |
-| Review list           | `/reviewlist/aiflow/:projectId/:workflowId`            | Lists pending review URLs for a workflow                                         | Preserve route and list; project engine review tasks into the current table shape                                   |
-| Review item           | `/review?token=...&aiflow=...&webhook=...`             | Loads data from Review API and posts approval to the workflow webhook            | Preserve page initially; replace trusted boolean headers with an authenticated, idempotent review decision contract |
+| Journey               | Current UI route                                       | Current behavior                                                                 | Compatibility decision                                                                                            |
+| --------------------- | ------------------------------------------------------ | -------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| Project workflow list | `/aiFlow/project/:projectId`                           | Lists workflows, activation, endpoint, edit/delete, interact, and review actions | Preserve route and table layout; consume the canonical engine list response                                       |
+| Create                | `/aiFlow/create/project/:projectId`                    | Three-step wizard: identity/service, trigger/output/fields, summary              | Preserve three steps; replace Step Two contents with schema-driven entry and destination configuration            |
+| Edit                  | `/aiFlow/edit/project/:projectId/workflow/:workflowId` | Loads one workflow and reuses the three-step shape                               | Preserve route; make `workflowId` opaque instead of calling `parseInt`                                            |
+| Connections           | `/aiFlow/credentials`                                  | CRUD for Google OAuth credentials and consent                                    | Preserve page location; present generic engine connections and provider consent                                   |
+| Demo/upload           | `/aiFlow/:workflowId`                                  | Converts a file to base64 and posts it to `endpoint_url`                         | Preserve page; intentionally replace transport with upload session -> direct S3 -> completion -> execution status |
+| Review list           | `/reviewlist/aiflow/:projectId/:workflowId`            | Lists pending review URLs for a workflow                                         | Preserve route and list; project engine review tasks into the current table shape                                 |
+| Review item           | `/review?token=...&aiflow=...&webhook=...`             | Loads data from Review API and posts approval to the workflow webhook            | Preserve page; use opaque `reviewTaskId`, engine content/preview, and authenticated idempotent decisions          |
 
 ## Current legacy browser-to-BFF HTTP surface
 
@@ -314,11 +314,18 @@ Confirmed current behavior:
 Target behavior:
 
 - Engine review state is keyed by `reviewTaskId` and `executionId`.
-- The existing Review System remains behind an adapter until ownership is agreed.
+- The review list calls the engine with the normal bearer token and maps safe task metadata into the current table; `devportal-backend` no longer owns new review-item rows.
+- The existing page opens `/review?reviewTaskId=<opaque-id>` rather than carrying a provider token, boolean mode, or workflow webhook in the query string.
+- The page loads bounded mapped values from the engine and previews the exact source object through a short-lived, task-authorized, direct-S3 read capability.
+- The existing Review System remains behind a presentation adapter only if its owner proves the required idempotency, authentication, access, retention, and deletion contract.
 - Approval/rejection is authenticated, expiring, idempotent, and transition-guarded.
 - No boolean header is sufficient authority to resume an execution.
 - Waiting for review uses no worker slot and no unacknowledged RabbitMQ delivery.
-- The existing review page consumes the canonical review-task resource with only localized display mapping.
+- The existing review page consumes the canonical review-task/content/source-access resources with only localized display and service mapping.
+- Cancel remains navigation; the target page adds an explicit durable Reject action.
+- Provider signatures, revised values, arbitrary redirect URLs, and long-lived capability tokens are not returned through browser navigation.
+
+The exact provider-neutral task, artifact, decision, retry, expiry, cleanup, and cutover rules are defined in [`review-v1.md`](review-v1.md).
 
 ## Authentication and tenancy finding
 

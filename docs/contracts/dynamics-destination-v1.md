@@ -44,7 +44,7 @@ Business Central on-premises and Dynamics NAV are not aliases for the online API
 - No automatic fallback occurs between Business Central, NAV, companies, actions, or connections.
 - Provider responses and ERP business data remain untrusted confidential input and are validated/redacted at the adapter boundary.
 
-The generic stage states, leases, retries, and manual retry chain are defined by [`execution-lifecycle.md`](execution-lifecycle.md). Mapped input and any future large delivery artifact follow [`storage-v1.md`](storage-v1.md).
+The generic stage states, leases, retries, and manual retry chain are defined by [`execution-lifecycle.md`](execution-lifecycle.md). Mapped input and any future large delivery artifact follow [`storage-v1.md`](storage-v1.md). When review is required, the exact immutable approved input and retry behavior follow [`review-v1.md`](review-v1.md).
 
 ## Product-family separation
 

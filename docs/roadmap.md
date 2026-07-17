@@ -58,6 +58,7 @@ Progress:
 - Microsoft Dynamics destination v1 product separation, connection/action descriptors, stable effect identity, receipt, unknown-outcome reconciliation, and Business Central draft recommendation: [`contracts/dynamics-destination-v1.md`](contracts/dynamics-destination-v1.md).
 - Workflow provisioning v1 activation API, operation lifecycle, connector capability modes, atomic version replacement, deactivation, and recovery: [`contracts/workflow-provisioning-v1.md`](contracts/workflow-provisioning-v1.md).
 - Microsoft SharePoint entry v1 connection/permission boundary, shared drive watch, callback, delta inventory, Graph-to-S3 ingestion, renewal, handover, and scaling: [`contracts/sharepoint-entry-v1.md`](contracts/sharepoint-entry-v1.md).
+- Human review v1 engine-owned task/decision state, DevPortal content and direct-S3 preview, Review System adapter requirements, idempotent execution resumption, expiry, and cleanup: [`contracts/review-v1.md`](contracts/review-v1.md).
 
 Required decisions:
 
@@ -69,7 +70,7 @@ Required decisions:
 6. Confirm the product, action, endpoint, authentication, effect extension, and schema values required by [`contracts/dynamics-destination-v1.md`](contracts/dynamics-destination-v1.md).
 7. Confirm the operation UX, limits, connector-version support, cleanup, and archive values required by [`contracts/workflow-provisioning-v1.md`](contracts/workflow-provisioning-v1.md).
 8. Confirm the identity/permission, product limits, callback/network, timing, retention, and UX values required by [`contracts/sharepoint-entry-v1.md`](contracts/sharepoint-entry-v1.md).
-9. Existing Review System ownership and callback contract.
+9. Confirm the product, authorization, existing Review System, browser access, callback, feedback/signature, retention, and cutover values required by [`contracts/review-v1.md`](contracts/review-v1.md).
 10. Existing DevPortal endpoints, request/response shapes, and workflow payloads that the compatibility layer must preserve.
 11. Initial retention, file-size, page-count, throughput, availability, and latency targets.
 
@@ -85,6 +86,7 @@ Deliverables:
 - Initial Microsoft Dynamics destination connection, action, effective-once write, receipt, and reconciliation proposal: [`contracts/dynamics-destination-v1.md`](contracts/dynamics-destination-v1.md).
 - Initial n8n-free workflow activation, connector provisioning, version cutover, deactivation, and recovery proposal: [`contracts/workflow-provisioning-v1.md`](contracts/workflow-provisioning-v1.md).
 - Initial SharePoint Online connection, subscription, callback, delta, ingestion, renewal, recovery, and scaling proposal: [`contracts/sharepoint-entry-v1.md`](contracts/sharepoint-entry-v1.md).
+- Initial human-review task, artifact, presentation, decision, expiry, retry, cleanup, and DevPortal compatibility proposal: [`contracts/review-v1.md`](contracts/review-v1.md).
 - Compatibility inventory for the existing DevPortal and `devportal-backend`.
 
 Exit criteria:
@@ -212,18 +214,22 @@ Purpose: absorb the remaining template and human-review responsibilities from th
 Scope:
 
 - Migrate personal-template ownership into the template module.
-- Add review-required workflow configuration and execution state.
-- Integrate with the existing Review System through an adapter.
-- Handle authenticated approval/rejection callbacks idempotently.
-- Resume approved executions and terminate rejected executions.
-- Implement object retention, cleanup, and deletion reconciliation.
+- Implement the review-required workflow policy and engine-owned review task state defined by [`contracts/review-v1.md`](contracts/review-v1.md).
+- Reuse the existing DevPortal review list/page with opaque task IDs, bounded engine content, and direct-S3 source preview.
+- Integrate the existing Review System through a presentation adapter only after its production eligibility is proven; otherwise use engine-native presentation behind the same DevPortal page.
+- Handle authenticated DevPortal decisions and any approved provider callbacks idempotently.
+- Commit revised review artifacts, resume approved executions once, and terminate rejected/expired executions.
+- Implement provider-copy and object retention, cleanup, and deletion reconciliation.
 
 Exit criteria:
 
 - Review waiting occupies no worker slot or RabbitMQ delivery.
-- Duplicate review callbacks cannot resume an execution twice.
+- Duplicate decisions/callbacks and concurrent approve/reject races cannot resume an execution twice.
+- Source documents preview directly from exact-version S3 and review content/capabilities never enter lists, messages, logs, or PostgreSQL.
+- Delivery after approval uses the exact immutable approved artifact and stable destination effect identity.
+- DevPortal compatibility tests cover list, view, approve, reject, expiry, conflict, and navigation without legacy tokens or trusted headers.
 - Template behavior needed by migrated workflows is covered by compatibility tests.
-- Retention and deletion jobs are auditable, retryable, and reconciled against S3.
+- Retention and deletion jobs are auditable, retryable, and reconciled against S3 and supported provider copies.
 
 ## Phase 6: migration, cutover, and retirement
 

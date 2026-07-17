@@ -45,11 +45,12 @@ The package named below owns the business meaning and repository contract. Physi
 | `documents`   | `documents`                                                                                            | Immutable source identity and accepted source-storage reference                                   |
 | `executions`  | `executions`, `execution_stages`, `stage_attempts`, `delivery_operations`                              | Provider-neutral lifecycle, attempts, waits, outputs, destination effects, and receipts           |
 | `extraction`  | `extraction_requests`, `extraction_callback_events`                                                    | External extraction operation, reconciliation, callback deduplication, and provider cleanup       |
+| `review`      | `review_tasks`, optional `review_callback_events`                                                      | Human decision, presentation reconciliation, callback deduplication, and provider cleanup         |
 | `core`        | `idempotency_records`, `audit_events`                                                                  | Boundary idempotency and append-only audit facts shared by use cases                              |
 | `messaging`   | `outbox_messages`, `inbox_messages`                                                                    | Atomic publication intent and logical-consumer deduplication                                      |
 | `database`    | `scheduler_leases`, `typeorm_migrations`                                                               | Global job leadership and schema history                                                          |
 
-Future phases add tables only when their feature arrives. Phase 4 adds provider-neutral `document_ingestions` and `connector_provisioning_bindings`, plus adapter-owned SharePoint watch, item-inventory, and notification-event records defined by [`sharepoint-entry-v1.md`](sharepoint-entry-v1.md). Review tasks arrive in Phase 5. Provider-specific fields remain inside validated connector configuration or connector-owned records; they do not become columns on `executions`.
+Future phases add tables only when their feature arrives. Phase 4 adds provider-neutral `document_ingestions` and `connector_provisioning_bindings`, plus adapter-owned SharePoint watch, item-inventory, and notification-event records defined by [`sharepoint-entry-v1.md`](sharepoint-entry-v1.md). Phase 5 adds `review_tasks` and adds `review_callback_events` only when provider callbacks are enabled, as defined by [`review-v1.md`](review-v1.md). Provider-specific fields remain inside validated connector configuration or connector-owned records; they do not become columns on `executions`.
 
 The extraction and delivery-operation tables are Phase 2 additions. Their ownership is fixed here so provider contracts are unambiguous; Phase 1 does not create unused provider tables.
 
@@ -70,6 +71,9 @@ documents
             -> stage_attempts -> storage_objects (optional canonical stage output)
                  -> extraction_requests (for EXTRACT)
                       -> extraction_callback_events
+
+       -> review_tasks (for REVIEW) -> storage_objects (approved revision, optional)
+            -> review_callback_events (only when callbacks are enabled)
 
 root execution/retry chain -> delivery_operations -> current DELIVER stage_attempt
 
@@ -208,6 +212,23 @@ Rules:
 - Provider calls, result transfer, and callback authentication do not occur inside a database transaction.
 - Exact behavior and retention/deletion responsibilities follow [`ocr-v1.md`](ocr-v1.md).
 
+### Review tasks and callbacks
+
+`review_tasks` stores one provider-neutral human-review operation per execution: workflow/stage association, exact mapped-input storage reference/hash/schema, presentation adapter/version, random stable submission key, safe provider correlation, guarded public status, preparation retry/reconciliation timing, ready/expiry time, immutable decision/output reference/hash, reviewer identity/time, feedback consent, provider-copy cleanup state, and safe failure projection.
+
+`review_callback_events` is created only when the selected presentation provider originates callbacks. It stores bounded append-only deduplication metadata: owning task/tenant, adapter/account, provider event ID, body hash, allow-listed event type, authentication outcome, receipt time, and handling outcome. It never stores revised values or a raw callback body.
+
+Rules:
+
+- `(tenant_id, execution_id)` and `(tenant_id, execution_stage_id)` are unique for v1.
+- The random `submission_key` is globally unique and reused for provider creation lookup/reconciliation.
+- A safe provider task reference is unique within adapter/account when present; bearer tokens and full capability URLs are not stored.
+- `(adapter_id, provider_account_ref, provider_event_id)` is unique for callback events.
+- Mapped/revised values remain in immutable S3 objects. PostgreSQL stores only exact storage references, schema versions, and hashes.
+- A terminal review decision, reviewer identity, and selected output reference cannot be rewritten.
+- Decision, review/execution transition, idempotency result, destination effect/command or terminal audit fact, and provider cleanup intent commit atomically.
+- Exact creation, decision, race, expiry, manual-retry, and cleanup behavior follows [`review-v1.md`](review-v1.md).
+
 ### Delivery operations
 
 `delivery_operations` stores one provider-neutral destination effect for a root retry chain and immutable connector/action version: connection/company references, random effect key, exact input storage-object/schema and payload hash, guarded status, current execution/attempt, reconciliation due/deadline, bounded external resource receipt, and safe failure projection.
@@ -320,6 +341,9 @@ Initial migrations add indexes only for known contract queries:
 | Workflow version history      | `(tenant_id, workflow_id, version_number)`                                 |
 | Current/due provisioning      | Partial `(status, next_attempt_at, id)` and `(lease_expires_at, id)` paths |
 | Workflow execution list       | `(tenant_id, workflow_id, created_at, id)`                                 |
+| Workflow review-task list     | `(tenant_id, workflow_id, created_at, id)`                                 |
+| Open review expiry            | Partial `(expires_at, id)` for `OPEN` tasks                                |
+| Due review/cleanup work       | Partial due-time indexes for preparation/reconciliation/cleanup states     |
 | Execution stage lookup        | `(tenant_id, execution_id, stage)`                                         |
 | Due retry/reconciliation scan | `(next_attempt_at, execution_id)` for due-capable stage states             |
 | Expired stage lease scan      | `(lease_expires_at, execution_id)` for running stages                      |
@@ -387,22 +411,24 @@ The migration suite must prove:
 
 These initial values inherit the proposed engineering envelope and require product/platform confirmation:
 
-| Record                           | Initial retention rule                                              |
-| -------------------------------- | ------------------------------------------------------------------- |
-| Active workflows/connections     | Retain while active or referenced                                   |
-| Archived workflow versions       | Retain at least as long as referencing executions/audit facts       |
-| Workflow activation operations   | Same workflow/audit lifetime; unresolved cleanup never auto-expires |
-| Documents and execution metadata | 1 year after terminal execution, subject to object-deletion policy  |
-| Execution stages and attempts    | Same lifetime as their execution                                    |
-| Extraction requests              | Same lifetime as their execution; provider copies follow OCR policy |
-| Extraction callback events       | 90 days and never shorter than provider callback replay policy      |
-| Delivery operations/receipts     | Same lifetime as root execution; longer only by financial policy    |
-| Audit events                     | 1 year                                                              |
-| Idempotency records              | 90 days and never shorter than the accepted external replay window  |
-| Inbox records                    | 90 days and never shorter than broker/DLQ replay policy             |
-| Confirmed outbox rows            | 30 days after `published_at`                                        |
-| Unpublished outbox rows          | Never expire automatically                                          |
-| Scheduler leases                 | Current row retained; obsolete job rows removed explicitly          |
+| Record                           | Initial retention rule                                                 |
+| -------------------------------- | ---------------------------------------------------------------------- |
+| Active workflows/connections     | Retain while active or referenced                                      |
+| Archived workflow versions       | Retain at least as long as referencing executions/audit facts          |
+| Workflow activation operations   | Same workflow/audit lifetime; unresolved cleanup never auto-expires    |
+| Documents and execution metadata | 1 year after terminal execution, subject to object-deletion policy     |
+| Execution stages and attempts    | Same lifetime as their execution                                       |
+| Extraction requests              | Same lifetime as their execution; provider copies follow OCR policy    |
+| Extraction callback events       | 90 days and never shorter than provider callback replay policy         |
+| Review tasks                     | Same lifetime as their execution; provider copies follow review policy |
+| Review callback events           | 90 days and never shorter than provider callback replay policy         |
+| Delivery operations/receipts     | Same lifetime as root execution; longer only by financial policy       |
+| Audit events                     | 1 year                                                                 |
+| Idempotency records              | 90 days and never shorter than the accepted external replay window     |
+| Inbox records                    | 90 days and never shorter than broker/DLQ replay policy                |
+| Confirmed outbox rows            | 30 days after `published_at`                                           |
+| Unpublished outbox rows          | Never expire automatically                                             |
+| Scheduler leases                 | Current row retained; obsolete job rows removed explicitly             |
 
 Retention cleanup uses small ordered batches, explicit dependency order, and metrics. It does not issue broad unbounded deletes. A failed S3 deletion keeps document deletion intent and is retried/reconciled; database metadata is not removed first.
 

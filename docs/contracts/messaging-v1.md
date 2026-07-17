@@ -18,6 +18,8 @@ Microsoft destination delivery uses the existing connector-specific delivery and
 
 Workflow activation/deactivation uses one provider-neutral provisioning command and queue defined by [`workflow-provisioning-v1.md`](workflow-provisioning-v1.md).
 
+Human-review presentation and provider-copy cleanup use the existing review queue plus one cleanup command defined by [`review-v1.md`](review-v1.md).
+
 Delivery is at least once. Publisher confirms and consumer acknowledgements reduce message loss but do not remove duplicate-delivery cases, so handlers must be idempotent. This matches RabbitMQ's [reliability guidance](https://www.rabbitmq.com/docs/reliability).
 
 ## Envelope
@@ -70,6 +72,7 @@ The envelope schema validates common metadata. Each message type has a separate 
 | `aiflow.execution.stage.extract.requested.v1`                          | `executionId`, `stage: EXTRACT`, `expectedStateVersion`                | Claim extraction work                                   |
 | `aiflow.execution.stage.map.requested.v1`                              | `executionId`, `stage: MAP`, `expectedStateVersion`                    | Claim mapping work                                      |
 | `aiflow.execution.stage.review.requested.v1`                           | `executionId`, `stage: REVIEW`, `expectedStateVersion`                 | Create or reconcile a review task                       |
+| `aiflow.review.provider-copy.delete.requested.v1`                      | `reviewTaskId`, `expectedStateVersion`                                 | Close/delete or reconcile one provider review copy      |
 | `aiflow.execution.stage.deliver.connector.<connector-id>.requested.v1` | `executionId`, `stage: DELIVER`, `connectorId`, `expectedStateVersion` | Claim destination-specific delivery                     |
 | `aiflow.execution.stage.reconcile.requested.v1`                        | `executionId`, `stage`, `expectedStateVersion`                         | Reconcile a persisted wait or unknown outcome           |
 | `aiflow.document.ingest.connector.<connector-id>.requested.v1`         | `ingestionId`, `connectorId`, `expectedStateVersion`                   | Claim provider-entry ingestion before `DOCUMENT_STAGED` |
@@ -105,6 +108,7 @@ The command routing key is the message `type` without the leading `aiflow.`. For
 | `aiflow.q.stage.extract.v1`                       | `extraction.provider-copy.delete.requested.v1`                  | Provider-copy cleanup               |
 | `aiflow.q.stage.map.v1`                           | `execution.stage.map.requested.v1`                              | Mapping workers                     |
 | `aiflow.q.stage.review.v1`                        | `execution.stage.review.requested.v1`                           | Review-adapter workers              |
+| `aiflow.q.stage.review.v1`                        | `review.provider-copy.delete.requested.v1`                      | Review provider-copy cleanup        |
 | `aiflow.q.stage.reconcile.v1`                     | `execution.stage.reconcile.requested.v1`                        | Reconciliation workers              |
 | `aiflow.q.connector.<connector-id>.ingest.v1`     | `document.ingest.connector.<connector-id>.requested.v1`         | One installed entry connector       |
 | `aiflow.q.connector.microsoft-sharepoint.sync.v1` | `connector.microsoft-sharepoint.watch.reconcile.requested.v1`   | SharePoint metadata/watch workers   |

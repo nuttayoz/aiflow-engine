@@ -106,6 +106,8 @@ The stable definition envelope contains five processing concerns:
 
 The envelope is vendor-neutral. `entry.config`, `extraction.config`, and `destination.config` are validated against the selected descriptor/profile schema. Display labels and icons come from catalogs and are not duplicated as authoritative workflow data.
 
+When `reviewPolicy.required` is `true`, `expiresAfterSeconds` is mandatory and must be between 60 seconds and 30 days. It is omitted when review is not required. Review occurs after mapping and follows [`review-v1.md`](review-v1.md).
+
 ### SharePoint entry example
 
 The Microsoft connector can replace only the entry binding:
@@ -316,11 +318,13 @@ The provider-neutral states, attempts, transition guards, failure categories, an
 
 ## Review endpoints
 
-| Method and path                                     | Purpose                                                    |
-| --------------------------------------------------- | ---------------------------------------------------------- |
-| `GET /api/v1/workflows/:workflowId/review-tasks`    | List review tasks, filterable by status                    |
-| `GET /api/v1/review-tasks/:reviewTaskId`            | Get safe review-task metadata and adapter link             |
-| `POST /api/v1/review-tasks/:reviewTaskId/decisions` | Submit one authenticated, idempotent approval or rejection |
+| Method and path                                         | Purpose                                                                  |
+| ------------------------------------------------------- | ------------------------------------------------------------------------ |
+| `GET /api/v1/workflows/:workflowId/review-tasks`        | Cursor-list authorized tasks by status without content or capabilities   |
+| `GET /api/v1/review-tasks/:reviewTaskId`                | Get safe task metadata, current state, failure, and allowed actions      |
+| `GET /api/v1/review-tasks/:reviewTaskId/content`        | Load bounded mapped values and frozen field/schema metadata              |
+| `POST /api/v1/review-tasks/:reviewTaskId/source-access` | Issue a short-lived exact-version read capability for the source preview |
+| `POST /api/v1/review-tasks/:reviewTaskId/decisions`     | Submit one authenticated, idempotent approval or rejection               |
 
 Decision example:
 
@@ -332,7 +336,9 @@ Decision example:
 }
 ```
 
-The review adapter defines how document/result artifacts are exchanged with the existing Review System. A request header such as `x-aiflow-review-approved` is never sufficient authority.
+`revisedData`, when present, is a complete replacement validated against the frozen destination action schema and stored as an immutable S3 review artifact. It is excluded from PostgreSQL, RabbitMQ, logs, and idempotency responses. Document preview bytes go directly from exact-version S3 storage to the authorized browser; they do not pass through this JSON API.
+
+The engine owns review task state and decision authority. A request header such as `x-aiflow-review-approved`, a provider token, or a URL is never sufficient authority. Exact task creation, presentation-adapter, artifact, decision, expiry, retry, DevPortal, and provider-cleanup behavior is defined in [`review-v1.md`](review-v1.md).
 
 ## Response and error envelopes
 

@@ -100,7 +100,7 @@ Initial provider-neutral kinds are:
 - `SOURCE_DOCUMENT`;
 - `EXTRACTION_RESULT`;
 - `MAPPING_RESULT`;
-- `REVIEW_ARTIFACT` when Phase 5 begins;
+- `REVIEW_ARTIFACT` for an immutable reviewer-approved replacement defined by [`review-v1.md`](review-v1.md);
 - `DELIVERY_ARTIFACT` only when a destination contract requires a stored payload.
 
 Destination receipts, provider operation IDs, and small safe response metadata stay in PostgreSQL rather than creating an S3 object without a real payload.
@@ -268,7 +268,7 @@ Rules:
 - Reads use exact `versionId`, stream with bounded memory, validate checksum, and close/abort promptly on cancellation or timeout.
 - Temporary local files are forbidden by default. A provider adapter that demonstrably requires a file path needs an ADR/security review, encrypted ephemeral volume, strict size limit, and guaranteed cleanup.
 
-No general presigned-download API is part of v1. A future user/review download endpoint must authorize the exact tenant/project/resource and issue a short-lived read-only capability; bucket/key input from the caller is never accepted.
+No general presigned-download API is part of v1. Phase 5 adds only the task-scoped review source-access endpoint defined in [`review-v1.md`](review-v1.md): it authorizes the exact tenant/project/task/document relation and issues a short-lived, exact-version, read-only capability. Bucket/key/version input from the caller is never accepted.
 
 ## Idempotency and reconciliation
 
