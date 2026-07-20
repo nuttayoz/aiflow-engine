@@ -480,9 +480,7 @@ The initial proposed target is RPO 15 minutes and RTO 4 hours, but the engine ca
 
 ## Local development boundary
 
-Phase 0B defines this contract but does not add Docker infrastructure.
-
-The first PostgreSQL slice in Phase 1 will add:
+The first PostgreSQL slice in Phase 1 implements:
 
 - a pinned PostgreSQL 18.4 local container with health check and named volume;
 - separate local application and migration identities;
@@ -490,6 +488,8 @@ The first PostgreSQL slice in Phase 1 will add:
 - TypeORM connection/readiness integration;
 - PostgreSQL integration tests against the same exact version, using isolated test databases;
 - documented reset/reseed commands that never target a non-local database.
+
+The operational commands, local identities, readiness behavior, rollout, and recovery procedure are documented in [`../operations/postgresql.md`](../operations/postgresql.md). The foundation migration stream intentionally contains no domain tables; those arrive only with their owning Phase 1 use cases and reviewed migrations.
 
 Local Kubernetes is not required. RabbitMQ and S3-compatible local dependencies arrive in their own Phase 1 slices so failures remain easy to diagnose.
 

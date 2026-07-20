@@ -1,21 +1,55 @@
 import 'reflect-metadata';
 
-import { Logger } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 
-import { SERVICE_NAME, waitForTerminationSignal } from '@aiflow/core';
+import { loadDatabaseRuntimeConfig, loadRuntimeConfig } from '@aiflow/config';
+import { waitForTerminationSignal } from '@aiflow/core';
+import {
+  createStructuredLogger,
+  NestStructuredLogger,
+  toSafeErrorLog,
+} from '@aiflow/observability';
 
 import { SchedulerModule } from './scheduler.module';
 
+let logger = createStructuredLogger({
+  environment: 'bootstrap',
+  level: 'info',
+  role: 'scheduler',
+});
+
 const bootstrap = async (): Promise<void> => {
-  const app = await NestFactory.createApplicationContext(SchedulerModule);
+  const runtimeConfig = loadRuntimeConfig('scheduler');
+  const databaseConfig = loadDatabaseRuntimeConfig();
+
+  logger = createStructuredLogger({
+    environment: runtimeConfig.environment,
+    level: runtimeConfig.logLevel,
+    role: runtimeConfig.role,
+  });
+
+  const app = await NestFactory.createApplicationContext(
+    SchedulerModule.register(databaseConfig),
+    {
+      logger: new NestStructuredLogger(logger),
+    },
+  );
 
   app.enableShutdownHooks();
-  Logger.log('Scheduler skeleton started; no jobs registered', SERVICE_NAME);
+  logger.info(
+    { event: 'runtime.started' },
+    'Scheduler skeleton started; no jobs registered',
+  );
 
   const signal = await waitForTerminationSignal();
-  Logger.log(`Scheduler received ${signal}; shutting down`, SERVICE_NAME);
+  logger.info({ event: 'runtime.stopping', signal }, 'Scheduler stopping');
   await app.close();
 };
 
-void bootstrap();
+void bootstrap().catch((error: unknown) => {
+  logger.fatal(
+    { event: 'runtime.startup.failed', ...toSafeErrorLog(error) },
+    'Scheduler failed to start',
+  );
+  process.exitCode = 1;
+});

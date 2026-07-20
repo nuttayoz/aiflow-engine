@@ -1,0 +1,65 @@
+import type { Migration } from 'typeorm';
+
+import type { DatabaseRuntimeConfig } from '@aiflow/config';
+
+import {
+  createMigrationBootstrapDataSource,
+  createMigrationDataSource,
+  type DatabaseMigrations,
+} from './data-source';
+import { ENGINE_MIGRATIONS } from './migrations';
+
+export const runDatabaseMigrations = async (
+  config: DatabaseRuntimeConfig,
+  migrations: DatabaseMigrations = ENGINE_MIGRATIONS,
+): Promise<readonly Migration[]> => {
+  if (!/^[a-z_][a-z0-9_]{0,62}$/.test(config.schema)) {
+    throw new Error('Database schema identifier is invalid');
+  }
+
+  const bootstrapDataSource = createMigrationBootstrapDataSource(config);
+  const dataSource = createMigrationDataSource(config, migrations);
+
+  try {
+    await bootstrapDataSource.initialize();
+    const [schema] = (await bootstrapDataSource.query(
+      `
+        SELECT
+          EXISTS (
+            SELECT 1
+            FROM pg_namespace
+            WHERE nspname = $1
+          ) AS "exists",
+          COALESCE((
+            SELECT pg_get_userbyid(nspowner) = current_user
+            FROM pg_namespace
+            WHERE nspname = $1
+          ), false) AS "ownedByCurrentUser"
+      `,
+      [config.schema],
+    )) as [{ exists: boolean; ownedByCurrentUser: boolean }];
+
+    if (schema.exists && !schema.ownedByCurrentUser) {
+      throw new Error('Migration identity must own the database schema');
+    }
+
+    if (!schema.exists) {
+      await bootstrapDataSource.query(
+        `CREATE SCHEMA "${config.schema}" AUTHORIZATION CURRENT_USER`,
+      );
+    }
+  } finally {
+    if (bootstrapDataSource.isInitialized) {
+      await bootstrapDataSource.destroy();
+    }
+  }
+
+  try {
+    await dataSource.initialize();
+    return await dataSource.runMigrations({ transaction: 'all' });
+  } finally {
+    if (dataSource.isInitialized) {
+      await dataSource.destroy();
+    }
+  }
+};

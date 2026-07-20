@@ -10,6 +10,8 @@
   "exclude": ["src/**/*.spec.ts"],
   "references": [
     { "path": "../../packages/config" },
-    { "path": "../../packages/core" }
+    { "path": "../../packages/core" },
+    { "path": "../../packages/database" },
+    { "path": "../../packages/observability" }
   ]
 }

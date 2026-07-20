@@ -1,6 +1,10 @@
 export const SERVICE_NAME = 'aiflow-engine';
 
 export type RuntimeRole = 'api' | 'worker' | 'scheduler';
+export type RuntimeProcess = RuntimeRole | 'migrate';
+
+export * from './correlation-id';
+export * from './request-context';
 
 export const waitForTerminationSignal = (): Promise<NodeJS.Signals> =>
   new Promise((resolve) => {

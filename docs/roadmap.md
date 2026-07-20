@@ -8,14 +8,14 @@ This roadmap controls implementation order. A phase starts only after its entry 
 | -------- | ---------------------------------- | ----------- |
 | Phase 0A | Repository skeleton                | Complete    |
 | Phase 0B | Contract and platform discovery    | In progress |
-| Phase 1  | Reliable engine foundation         | Not started |
+| Phase 1  | Reliable engine foundation         | In progress |
 | Phase 2  | Direct-upload proof and demo       | Not started |
 | Phase 3  | Existing DevPortal compatibility   | Not started |
 | Phase 4  | SharePoint entry and destination   | Not started |
 | Phase 5  | Templates and review               | Not started |
 | Phase 6  | Migration, cutover, and retirement | Not started |
 
-No later phase is partially implemented in the skeleton.
+No Phase 2 or later product behavior is implemented.
 
 ## Phase 0A: repository skeleton
 
@@ -101,7 +101,19 @@ Exit criteria:
 
 ## Phase 1: reliable engine foundation
 
+Status: in progress.
+
 Purpose: prove that execution state and commands cannot be lost before adding real document processing.
+
+Implemented in this foundation slice:
+
+- Validated runtime/API configuration and bounded PostgreSQL runtime configuration for the next database slice.
+- Framework-independent request and canonical authorization-context types with asynchronous correlation isolation.
+- Pino JSON logging shared by API, worker, and scheduler roles with defensive secret redaction and safe startup failures.
+- API correlation-header propagation and bounded request-completion logs that exclude bodies, query strings, and headers.
+- PostgreSQL 18.4 local/test environment with separate bootstrap, migration, and runtime identities.
+- Bounded TypeORM runtime pools, migration-only schema ownership, transactional migration command, lifecycle shutdown, and database-aware readiness.
+- Exact-version integration coverage proving runtime DML access and denial of runtime DDL.
 
 Implementation order:
 

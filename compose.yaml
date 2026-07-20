@@ -1,0 +1,26 @@
+services:
+  postgres:
+    image: postgres:18.4-bookworm
+    environment:
+      POSTGRES_DB: aiflow
+      POSTGRES_PASSWORD: local-bootstrap-only
+      POSTGRES_USER: aiflow_bootstrap
+    ports:
+      - '127.0.0.1:${AIFLOW_POSTGRES_PORT:-55439}:5432'
+    volumes:
+      - aiflow-postgres-data:/var/lib/postgresql
+      - ./infra/postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test:
+        [
+          'CMD-SHELL',
+          "PGPASSWORD=local-application-only psql --no-password --username=aiflow_app --dbname=aiflow --command='SELECT 1' >/dev/null",
+        ]
+      interval: 2s
+      timeout: 5s
+      retries: 15
+      start_period: 10s
+    restart: unless-stopped
+
+volumes:
+  aiflow-postgres-data:
