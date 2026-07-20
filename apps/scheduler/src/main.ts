@@ -2,7 +2,7 @@ import 'reflect-metadata';
 
 import { NestFactory } from '@nestjs/core';
 
-import { loadRuntimeConfig } from '@aiflow/config';
+import { loadDatabaseRuntimeConfig, loadRuntimeConfig } from '@aiflow/config';
 import { waitForTerminationSignal } from '@aiflow/core';
 import {
   createStructuredLogger,
@@ -20,6 +20,7 @@ let logger = createStructuredLogger({
 
 const bootstrap = async (): Promise<void> => {
   const runtimeConfig = loadRuntimeConfig('scheduler');
+  const databaseConfig = loadDatabaseRuntimeConfig();
 
   logger = createStructuredLogger({
     environment: runtimeConfig.environment,
@@ -27,9 +28,12 @@ const bootstrap = async (): Promise<void> => {
     role: runtimeConfig.role,
   });
 
-  const app = await NestFactory.createApplicationContext(SchedulerModule, {
-    logger: new NestStructuredLogger(logger),
-  });
+  const app = await NestFactory.createApplicationContext(
+    SchedulerModule.register(databaseConfig),
+    {
+      logger: new NestStructuredLogger(logger),
+    },
+  );
 
   app.enableShutdownHooks();
   logger.info(

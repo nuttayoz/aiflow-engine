@@ -2,7 +2,11 @@ import 'reflect-metadata';
 
 import { NestFactory } from '@nestjs/core';
 
-import { loadApiRuntimeConfig, loadRuntimeConfig } from '@aiflow/config';
+import {
+  loadApiRuntimeConfig,
+  loadDatabaseRuntimeConfig,
+  loadRuntimeConfig,
+} from '@aiflow/config';
 import { RequestContextStore } from '@aiflow/core';
 import {
   createStructuredLogger,
@@ -22,6 +26,7 @@ let logger = createStructuredLogger({
 const bootstrap = async (): Promise<void> => {
   const runtimeConfig = loadRuntimeConfig('api');
   const apiConfig = loadApiRuntimeConfig();
+  const databaseConfig = loadDatabaseRuntimeConfig();
   const contextStore = new RequestContextStore();
 
   logger = createStructuredLogger({
@@ -31,7 +36,7 @@ const bootstrap = async (): Promise<void> => {
     role: runtimeConfig.role,
   });
 
-  const app = await NestFactory.create(ApiModule, {
+  const app = await NestFactory.create(ApiModule.register(databaseConfig), {
     logger: new NestStructuredLogger(logger),
   });
 

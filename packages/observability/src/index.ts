@@ -5,7 +5,7 @@ import { ConfigurationError, type LogLevel } from '@aiflow/config';
 import {
   SERVICE_NAME,
   type RequestContextStore,
-  type RuntimeRole,
+  type RuntimeProcess,
 } from '@aiflow/core';
 
 const REDACTED = '[REDACTED]';
@@ -15,7 +15,7 @@ export interface StructuredLoggerOptions {
   contextStore?: RequestContextStore;
   environment: string;
   level: LogLevel;
-  role: RuntimeRole;
+  role: RuntimeProcess;
 }
 
 export interface SafeErrorLog {

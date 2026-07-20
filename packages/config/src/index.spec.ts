@@ -1,6 +1,7 @@
 import {
   ConfigurationError,
   loadApiRuntimeConfig,
+  loadDatabaseMigrationConfig,
   loadDatabaseRuntimeConfig,
   loadRuntimeConfig,
 } from './index';
@@ -67,6 +68,15 @@ describe('database runtime configuration', () => {
     expect(() =>
       loadDatabaseRuntimeConfig({ DATABASE_URL: 'https://secret@example.com' }),
     ).toThrow('DATABASE_URL must be a valid PostgreSQL connection URL');
+  });
+
+  it('loads migration credentials only through the migration boundary', () => {
+    expect(
+      loadDatabaseMigrationConfig({ DATABASE_MIGRATION_URL: databaseUrl }).url,
+    ).toBe(databaseUrl);
+    expect(() =>
+      loadDatabaseMigrationConfig({ DATABASE_URL: databaseUrl }),
+    ).toThrow('DATABASE_MIGRATION_URL is required');
   });
 
   it('requires verified TLS in production', () => {

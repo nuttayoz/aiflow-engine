@@ -1,4 +1,4 @@
-import type { RuntimeRole } from '@aiflow/core';
+import type { RuntimeProcess } from '@aiflow/core';
 
 const DEFAULT_API_HOST = '0.0.0.0';
 const DEFAULT_API_PORT = 3000;
@@ -35,7 +35,7 @@ export class ConfigurationError extends Error {
 export interface RuntimeConfig {
   environment: NodeEnvironment;
   logLevel: LogLevel;
-  role: RuntimeRole;
+  role: RuntimeProcess;
 }
 
 export interface ApiRuntimeConfig {
@@ -100,9 +100,9 @@ const readInteger = (
   return parsed;
 };
 
-const readDatabaseUrl = (value: string | undefined): string => {
+const readDatabaseUrl = (name: string, value: string | undefined): string => {
   if (value === undefined || value.trim().length === 0) {
-    throw new ConfigurationError('DATABASE_URL is required');
+    throw new ConfigurationError(`${name} is required`);
   }
 
   const normalized = value.trim();
@@ -115,7 +115,7 @@ const readDatabaseUrl = (value: string | undefined): string => {
     }
   } catch {
     throw new ConfigurationError(
-      'DATABASE_URL must be a valid PostgreSQL connection URL',
+      `${name} must be a valid PostgreSQL connection URL`,
     );
   }
 
@@ -135,7 +135,7 @@ const readDatabaseSchema = (value: string | undefined): string => {
 };
 
 export const loadRuntimeConfig = (
-  role: RuntimeRole,
+  role: RuntimeProcess,
   environment: NodeJS.ProcessEnv = process.env,
 ): RuntimeConfig => ({
   environment: readEnum(
@@ -160,8 +160,9 @@ export const loadApiRuntimeConfig = (
   }),
 });
 
-export const loadDatabaseRuntimeConfig = (
-  environment: NodeJS.ProcessEnv = process.env,
+const loadDatabaseConfig = (
+  urlName: 'DATABASE_MIGRATION_URL' | 'DATABASE_URL',
+  environment: NodeJS.ProcessEnv,
 ): DatabaseRuntimeConfig => {
   const nodeEnvironment = readEnum(
     'NODE_ENV',
@@ -215,6 +216,15 @@ export const loadDatabaseRuntimeConfig = (
       minimum: 1_000,
       name: 'DATABASE_STATEMENT_TIMEOUT_MS',
     }),
-    url: readDatabaseUrl(environment.DATABASE_URL),
+    url: readDatabaseUrl(urlName, environment[urlName]),
   };
 };
+
+export const loadDatabaseRuntimeConfig = (
+  environment: NodeJS.ProcessEnv = process.env,
+): DatabaseRuntimeConfig => loadDatabaseConfig('DATABASE_URL', environment);
+
+export const loadDatabaseMigrationConfig = (
+  environment: NodeJS.ProcessEnv = process.env,
+): DatabaseRuntimeConfig =>
+  loadDatabaseConfig('DATABASE_MIGRATION_URL', environment);

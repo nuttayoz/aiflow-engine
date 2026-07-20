@@ -111,6 +111,9 @@ Implemented in this foundation slice:
 - Framework-independent request and canonical authorization-context types with asynchronous correlation isolation.
 - Pino JSON logging shared by API, worker, and scheduler roles with defensive secret redaction and safe startup failures.
 - API correlation-header propagation and bounded request-completion logs that exclude bodies, query strings, and headers.
+- PostgreSQL 18.4 local/test environment with separate bootstrap, migration, and runtime identities.
+- Bounded TypeORM runtime pools, migration-only schema ownership, transactional migration command, lifecycle shutdown, and database-aware readiness.
+- Exact-version integration coverage proving runtime DML access and denial of runtime DDL.
 
 Implementation order:
 

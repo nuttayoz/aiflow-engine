@@ -55,6 +55,9 @@ Verified baseline on 2026-07-17:
 | Redis             | 8.8              | Latest stable Redis Open Source release if the optional Redis integration is used.  |
 | NestJS            | 11.1.28          | Latest stable NestJS packages and already pinned consistently across runtime roles. |
 | Pino              | 10.3.1           | Latest stable structured logger, shared across the three runtime roles.             |
+| TypeORM           | 1.1.0            | Latest stable ORM/migration release compatible with Node 24 and PostgreSQL.         |
+| `pg`              | 8.22.0           | Latest stable PostgreSQL driver and a supported TypeORM peer.                       |
+| Testcontainers    | 12.0.4           | Latest stable Node test container library for PostgreSQL contract tests.            |
 | TypeScript        | 6.0.3            | Latest release supported by current `typescript-eslint` and `ts-jest` peer ranges.  |
 | Jest              | 30.4.2           | Latest stable Jest release, supported by the current `ts-jest`.                     |
 | ESLint            | 10.7.0           | Latest stable ESLint release.                                                       |
@@ -62,7 +65,7 @@ Verified baseline on 2026-07-17:
 
 TypeScript 7.0.2 is newer but is not selected because the current stable `typescript-eslint` and `ts-jest` versions do not support it. Re-evaluate it when the full toolchain supports it.
 
-Planned Phase 1 libraries such as TypeORM, `pg`, `amqplib`, AWS SDK v3, Ajv, JOSE, and Testcontainers remain uninstalled. Their exact versions will be verified and pinned when their Phase 1 slice begins.
+Planned Phase 1 libraries such as `amqplib`, AWS SDK v3, Ajv, and JOSE remain uninstalled. Their exact versions will be verified and pinned when their Phase 1 slice begins.
 
 ## Consequences
 

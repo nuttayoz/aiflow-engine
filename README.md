@@ -24,18 +24,20 @@ Requirements:
 
 - Bun 1.3.14
 - Node.js 24.18.0 LTS
-- Docker for optional image verification
+- Docker with Compose for PostgreSQL and integration tests
 
 ```bash
 bun install --frozen-lockfile
+bun run db:up
+bun run db:migrate
 bun run check
 bun run build
 bun run start:api
 ```
 
-Runtime configuration comes only from validated environment variables. Copy `.env.example` only for local values and never commit `.env` or real credentials. JSON logs include service, runtime role, environment, event, and request correlation fields while omitting request bodies, query strings, authorization headers, and known secret fields.
+Runtime configuration comes only from validated environment variables. Copy `.env.example` to `.env` only for local values and never commit `.env` or real credentials. Bun loads the local file for repository scripts. JSON logs include service, runtime role, environment, event, and request correlation fields while omitting request bodies, query strings, authorization headers, and known secret fields.
 
-The database variables are validated now so the next PostgreSQL slice has a stable input contract. This branch does not connect to PostgreSQL or use migration credentials yet.
+PostgreSQL uses separate runtime and migration URLs. API, worker, and scheduler never load migration credentials. See the [PostgreSQL runbook](docs/operations/postgresql.md) for local identities, reset, rollout, and recovery behavior.
 
 Health endpoints:
 
@@ -43,6 +45,8 @@ Health endpoints:
 GET /health/live
 GET /health/ready
 ```
+
+Readiness returns `503 DATABASE_UNAVAILABLE` until the runtime identity can execute a bounded PostgreSQL probe. Run the exact-version integration suite separately with `bun run test:integration`.
 
 ## Repository layout
 
@@ -72,6 +76,8 @@ packages/
 docs/
   architecture/
     principles.md
+  operations/
+    postgresql.md
   contracts/
     auth-tenancy.md
     canonical-api-v1.md
@@ -121,4 +127,4 @@ bun run commitlint --edit .git/COMMIT_EDITMSG
 
 ## Scope guard
 
-This repository does not build or operate DevPortal, authentication, Kubernetes, CI/CD, PostgreSQL, RabbitMQ, Redis, Sentry, Grafana, or OCR. It integrates with those existing platform capabilities in later phases.
+This repository does not build or operate DevPortal, authentication, Kubernetes, CI/CD, production PostgreSQL, RabbitMQ, Redis, Sentry, Grafana, or OCR. It supplies engine adapters, migrations, health checks, and local test infrastructure while the existing platform continues to own production services.
