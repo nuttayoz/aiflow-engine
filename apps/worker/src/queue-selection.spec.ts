@@ -16,6 +16,8 @@ describe('parseQueueSelection', () => {
       'aiflow.q.workflow.provisioning.v1',
       'aiflow.q.stage.extract.v1',
       'aiflow.q.stage.map.v1',
+      'aiflow.q.stage.reconcile.v1',
+      'aiflow.q.connector.microsoft-business-central.deliver.v1',
       'aiflow.q.connector.phase1-synthetic.deliver.v1',
     ]);
   });

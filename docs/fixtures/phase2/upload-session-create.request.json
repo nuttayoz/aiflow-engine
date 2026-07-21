@@ -1,0 +1,9 @@
+{
+  "originalFilename": "invoice.pdf",
+  "contentType": "application/pdf",
+  "sizeBytes": 4096,
+  "checksum": {
+    "algorithm": "SHA256",
+    "value": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+  }
+}

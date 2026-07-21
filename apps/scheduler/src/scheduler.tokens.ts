@@ -1,0 +1,1 @@
+export const SCHEDULER_S3_CONFIG = Symbol('SCHEDULER_S3_CONFIG');

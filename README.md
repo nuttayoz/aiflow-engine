@@ -1,8 +1,10 @@
 # AiFlow Engine
 
 AiFlow Engine is the single replacement repository for the n8n-based AiFlow
-runtime services. Phase 1 now provides the reliable, runnable engine foundation;
-real OCR, Dynamics, SharePoint, review, and DevPortal product behavior begins in
+runtime services. Phase 2 provides a runnable direct-upload proof: canonical
+APIs, immutable S3 staging, fake external OCR, deterministic mapping, and one
+effective-once Microsoft Business Central draft action. SharePoint, human
+review, real provider adapters, and the existing DevPortal migration remain in
 later roadmap phases.
 
 The existing DevPortal frontend is not part of this repository and will not be rebuilt. Its AiFlow screens will call this engine's canonical APIs directly. `devportal-backend` remains responsible for its existing non-AiFlow features and temporary legacy traffic, but it is not part of the new AiFlow runtime path.
@@ -17,7 +19,7 @@ aiflow-engine worker --queues=extract,map
 aiflow-engine scheduler
 ```
 
-- `api`: HTTP entry point. Phase 1 exposes liveness and database readiness.
+- `api`: canonical workflow, catalog, upload, and execution APIs plus health.
 - `worker`: consumes independently selectable provisioning and stage queues.
 - `scheduler`: publishes the transactional outbox and recovers expired leases and
   due retries under database leadership.
@@ -33,7 +35,7 @@ Requirements:
 ```bash
 bun install --frozen-lockfile
 cp .env.example .env
-bun run phase1:prepare
+bun run phase2:prepare
 bun run check
 bun run test:integration
 ```
@@ -46,16 +48,29 @@ bun run start:worker
 bun run start:scheduler
 ```
 
-Then prove the durable Phase 1 flow from a fourth terminal:
+Then prove the complete Phase 2 flow from a fourth terminal:
 
 ```bash
-bun run phase1:smoke
+bun run phase2:smoke
 ```
 
-The smoke command creates and activates a provider-neutral test workflow, streams
-a small source object into local S3, stages a document, commits the execution and
-outbox command, and waits for RabbitMQ workers to complete synthetic EXTRACT, MAP,
-and DELIVER stages. Synthetic stages are disabled in production.
+The smoke command starts isolated API, worker, and scheduler processes, creates
+and activates an invoice workflow through `/api/v1`, uploads a small document
+directly to local S3, and waits for EXTRACT, MAP, and Business Central DELIVER to
+succeed. Document bytes do not pass through the API, PostgreSQL, or RabbitMQ.
+
+To use the disposable DevPortal-shaped browser harness, keep the three runtime
+roles above running and start:
+
+```bash
+bun run phase2:demo
+```
+
+Open `http://localhost:4173`. The harness uses the shared
+`@aiflow/api-client`, local token `aiflow-demo-token-a`, and project
+`demo-project-a`. The demo identity and fake OCR/Business Central adapters are
+non-production composition only; production startup fails closed until the real
+platform authentication and external-provider adapters are configured.
 
 Runtime configuration comes only from validated environment variables. Copy `.env.example` to `.env` only for local values and never commit `.env` or real credentials. Bun loads the local file for repository scripts. JSON logs include service, runtime role, environment, event, and request correlation fields while omitting request bodies, query strings, authorization headers, and known secret fields.
 
@@ -97,6 +112,7 @@ packages/
   storage/
   connector-sdk/
   connector-test-suite/
+  api-client/
   workflows/
   connections/
   documents/
@@ -136,12 +152,14 @@ docs/
     0001-current-stable-versions.md
     README.md
   roadmap.md
+tools/
+  demo-ui/
 ```
 
-Provider-specific connector packages remain deliberately deferred, but the Phase
-1 package boundaries now contain provider-neutral workflow validation,
-provisioning, execution state transitions, PostgreSQL repositories, RabbitMQ
-transport, S3 storage, connector contracts, and observability adapters.
+The Business Central package in Phase 2 contains the action descriptor,
+effective-once delivery processor, and a deterministic fake adapter. Real
+provider credentials and network calls remain behind the same port for a later
+deployment slice.
 
 Implementation sequencing is defined in [`docs/roadmap.md`](docs/roadmap.md). Phase 0B contracts currently include the [`canonical API v1`](docs/contracts/canonical-api-v1.md), [`workflow provisioning v1`](docs/contracts/workflow-provisioning-v1.md), [`execution lifecycle`](docs/contracts/execution-lifecycle.md), [`RabbitMQ messaging v1`](docs/contracts/messaging-v1.md), [`PostgreSQL persistence v1`](docs/contracts/postgresql-v1.md), [`object storage v1`](docs/contracts/storage-v1.md), [`external OCR v1`](docs/contracts/ocr-v1.md), [`custom extraction templates v1`](docs/contracts/extraction-templates-v1.md), [`Microsoft Dynamics destination v1`](docs/contracts/dynamics-destination-v1.md), [`Microsoft SharePoint entry v1`](docs/contracts/sharepoint-entry-v1.md), [`human review v1`](docs/contracts/review-v1.md), [`DevPortal compatibility discovery`](docs/contracts/devportal-compatibility.md), and [`platform baseline`](docs/contracts/platform-baseline.md).
 

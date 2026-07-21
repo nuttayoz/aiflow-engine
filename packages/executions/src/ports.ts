@@ -59,16 +59,42 @@ export interface ScheduleExecutionRetryInput {
   readonly tenantId: string;
 }
 
+export interface FailExecutionStageInput {
+  readonly executionId: string;
+  readonly expectedStateVersion: number;
+  readonly failure: SafeExecutionFailure;
+  readonly leaseOwner: string;
+  readonly stage: ExecutionStage;
+  readonly tenantId: string;
+}
+
+export interface RetryExecutionInput {
+  readonly actor: ActorIdentity;
+  readonly causationId: string;
+  readonly correlationId: string;
+  readonly executionId: string;
+  readonly idempotencyKey: string;
+  readonly retryExecutionId: string;
+  readonly tenantId: string;
+}
+
 export interface ExecutionRepository {
   claimStage(
     input: ClaimExecutionStageInput,
   ): Promise<ClaimedExecutionStage | undefined>;
   completeStage(input: CompleteExecutionStageInput): Promise<ExecutionRecord>;
   create(input: CreateExecutionInput): Promise<ExecutionRecord>;
+  failStage(input: FailExecutionStageInput): Promise<ExecutionRecord>;
   findById(
     tenantId: string,
     executionId: string,
   ): Promise<ExecutionRecord | undefined>;
+  listByWorkflow(
+    tenantId: string,
+    workflowId: string,
+    limit?: number,
+  ): Promise<readonly ExecutionRecord[]>;
+  retry(input: RetryExecutionInput): Promise<ExecutionRecord>;
   scheduleRetry(input: ScheduleExecutionRetryInput): Promise<ExecutionRecord>;
 }
 

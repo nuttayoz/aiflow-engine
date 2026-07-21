@@ -155,6 +155,22 @@ S3 provides strong read-after-write consistency for object PUT/DELETE and object
 
 ## Direct browser upload
 
+An upload session has only four truthful durable states:
+
+| Status      | Meaning                                                                    |
+| ----------- | -------------------------------------------------------------------------- |
+| `ACTIVE`    | Metadata and one storage reservation exist; upload capability may be used  |
+| `COMPLETED` | Exact object verification produced one immutable document and execution    |
+| `ABORTED`   | The caller closed the incomplete session and the reservation was abandoned |
+| `EXPIRED`   | The server closed the incomplete session after its deadline                |
+
+There is no `UPLOADED` state because a browser-to-S3 transfer is not trusted
+until the completion path inspects and verifies the exact object. Mutable
+session operations use `stateVersion`; repeated completion returns the same
+document/execution, and terminal sessions never become active again. A
+multipart upload reference is confidential adapter state and is never returned
+to the browser.
+
 ### Session creation
 
 `POST /api/v1/workflows/:workflowId/upload-sessions`:

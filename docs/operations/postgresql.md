@@ -71,9 +71,14 @@ API, worker, and scheduler load only `DATABASE_URL`. They never receive or fall 
 
 ## Rollout and recovery
 
-The foundation schema is an additive transactional migration with no data
-backfill. It creates the Phase 1 domain tables, composite tenant foreign keys,
-state guards, and known-query indexes.
+The foundation schema and Phase 2 upload/pipeline schemas use additive
+transactional migrations with no data backfill. The upload-session migrations
+add the session and immutable multipart-part tables, tenant-scoped foreign keys,
+lifecycle guards, and partial indexes for active-session quotas and expiry
+scans. The pipeline migration also adds document content hashes, immutable
+processing-artifact references, extraction requests/callback deduplication, and
+effective-once delivery operations. It adds nullable columns to `documents` and
+does not require a table backfill.
 
 Production rollout order:
 
@@ -82,10 +87,27 @@ Production rollout order:
 3. API, worker, and scheduler roll out with the runtime identity.
 4. Readiness and pool metrics are observed before increasing replicas.
 
+For the upload-session migration, deploy in expand-first order: run the
+migration while Phase 1 processes are still running, then deploy Phase 2 code.
+Phase 1 processes do not query the new table, so mixed-version operation is safe.
+Before enabling the upload API, verify the runtime identity can select, insert,
+and update `upload_sessions` and can select and insert
+`upload_session_parts` through its normal default table privileges.
+Also verify access to `processing_artifacts`, `extraction_requests`,
+`extraction_callback_events`, and `delivery_operations` before enabling Phase 2
+workers.
+
 Rollback uses the previous application image. Do not automatically run
 destructive down migrations. The `aiflow` schema and TypeORM migration history
 remain in place for forward repair or the next compatible image. Each later
 persistent migration must add its own lock/performance, mixed-version, backfill,
 and recovery instructions before merge.
+
+Rolling the application back before upload traffic begins requires no database
+rollback. After any upload session exists, do not run the migration's destructive
+`down` method; retain the additive table and deploy a forward repair. An abort or
+expiry keeps terminal session metadata and marks its still-reserved storage
+object `ABANDONED`, allowing the storage cleanup workflow to remove bytes by
+exact key/version when applicable.
 
 For a failed migration, stop the rollout, retain the database state and migration logs, determine whether PostgreSQL committed the transaction, then use the migration-specific forward repair or approved restore procedure. Never edit the migration-history table manually.

@@ -6,5 +6,11 @@
   "types": "dist/index.d.ts",
   "files": [
     "dist"
-  ]
+  ],
+  "dependencies": {
+    "@aiflow/connector-sdk": "workspace:*",
+    "@aiflow/executions": "workspace:*",
+    "@aiflow/mappings": "workspace:*",
+    "@aiflow/storage": "workspace:*"
+  }
 }

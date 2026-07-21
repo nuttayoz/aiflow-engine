@@ -31,6 +31,7 @@ export interface CreateWorkflowInput {
   readonly causationId: string;
   readonly correlationId: string;
   readonly definition: ValidatedWorkflowDefinition;
+  readonly idempotencyKey?: string;
   readonly name: string;
   readonly projectId: string;
   readonly tenantId: string;
@@ -52,6 +53,15 @@ export interface WorkflowRepository {
     workflowId: string,
     versionId: string,
   ): Promise<WorkflowVersionRecord | undefined>;
+  findLatestVersion(
+    tenantId: string,
+    workflowId: string,
+  ): Promise<WorkflowVersionRecord | undefined>;
+  listByProject(
+    tenantId: string,
+    projectId: string,
+    limit?: number,
+  ): Promise<readonly WorkflowRecord[]>;
 }
 
 export type ProvisioningOperationStatus =

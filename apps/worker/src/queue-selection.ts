@@ -7,6 +7,8 @@ const DEFAULT_FOUNDATION_SELECTIONS = [
   'provisioning',
   'extract',
   'map',
+  'reconcile',
+  'microsoft-business-central',
   'phase1-synthetic',
 ] as const;
 
@@ -37,6 +39,10 @@ export const resolveQueueNames = (selections: readonly string[]): string[] => {
   return selected.map((selection) => {
     if (selection === 'phase1-synthetic') {
       return connectorQueueBinding('phase1-synthetic', 'deliver').name;
+    }
+    if (selection === 'microsoft-business-central') {
+      return connectorQueueBinding('microsoft-business-central', 'deliver')
+        .name;
     }
     const queueName = queueNameForSelection(selection);
     if (queueName === undefined) {

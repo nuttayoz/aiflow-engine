@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 
 import type { DataSource, EntityManager } from 'typeorm';
 
@@ -67,6 +67,7 @@ const mapWorkflow = (row: WorkflowRow): WorkflowRecord => ({
 export class PostgresWorkflowRepository implements WorkflowRepository {
   private readonly auditEvents: string;
   private readonly connectionReferences: string;
+  private readonly idempotency: string;
   private readonly profileReferences: string;
   private readonly versions: string;
   private readonly workflows: string;
@@ -80,6 +81,7 @@ export class PostgresWorkflowRepository implements WorkflowRepository {
       schema,
       'workflow_version_connection_refs',
     );
+    this.idempotency = table(schema, 'idempotency_records');
     this.profileReferences = table(schema, 'workflow_version_profile_refs');
     this.versions = table(schema, 'workflow_versions');
     this.workflows = table(schema, 'workflows');
@@ -93,7 +95,59 @@ export class PostgresWorkflowRepository implements WorkflowRepository {
       throw new Error('WORKFLOW_NAME_INVALID');
     }
 
-    await this.dataSource.transaction(async (manager) => {
+    const created = await this.dataSource.transaction(async (manager) => {
+      if (input.idempotencyKey !== undefined) {
+        const fingerprint = createHash('sha256')
+          .update(
+            JSON.stringify({
+              definitionHash: input.definition.definitionHash,
+              name: input.name.trim(),
+              projectId: input.projectId,
+            }),
+          )
+          .digest('hex');
+        const inserted = (await manager.query(
+          `
+            INSERT INTO ${this.idempotency} (
+              id, tenant_id, operation_scope, idempotency_key,
+              request_fingerprint, status, resource_type, resource_id,
+              completed_at, expires_at
+            ) VALUES (
+              $1, $2, 'workflow.create', $3, $4, 'COMPLETED',
+              'WORKFLOW', $5, clock_timestamp(), clock_timestamp() + interval '90 days'
+            )
+            ON CONFLICT (tenant_id, operation_scope, idempotency_key) DO NOTHING
+            RETURNING id
+          `,
+          [
+            randomUUID(),
+            input.tenantId,
+            input.idempotencyKey,
+            fingerprint,
+            input.workflowId,
+          ],
+        )) as { id: string }[];
+        if (inserted.length === 0) {
+          const rows = (await manager.query(
+            `
+              SELECT request_fingerprint, resource_id
+              FROM ${this.idempotency}
+              WHERE tenant_id = $1
+                AND operation_scope = 'workflow.create'
+                AND idempotency_key = $2
+              FOR UPDATE
+            `,
+            [input.tenantId, input.idempotencyKey],
+          )) as { request_fingerprint: string; resource_id: string | null }[];
+          if (rows[0]?.request_fingerprint !== fingerprint) {
+            throw new Error('IDEMPOTENCY_KEY_REUSED');
+          }
+          if (rows[0]?.resource_id !== input.workflowId) {
+            throw new Error('IDEMPOTENCY_RESOURCE_CONFLICT');
+          }
+          return false;
+        }
+      }
       await manager.query(
         `
           INSERT INTO ${this.workflows} (
@@ -166,6 +220,7 @@ export class PostgresWorkflowRepository implements WorkflowRepository {
         ],
       );
       await this.appendAudit(manager, input);
+      return true;
     });
 
     const workflow = await this.findById(input.tenantId, input.workflowId);
@@ -175,7 +230,11 @@ export class PostgresWorkflowRepository implements WorkflowRepository {
       input.versionId,
     );
     if (workflow === undefined || version === undefined) {
-      throw new Error('WORKFLOW_CREATE_INCONSISTENT');
+      throw new Error(
+        created
+          ? 'WORKFLOW_CREATE_INCONSISTENT'
+          : 'WORKFLOW_IDEMPOTENCY_INCONSISTENT',
+      );
     }
 
     return { version, workflow };
@@ -287,6 +346,48 @@ export class PostgresWorkflowRepository implements WorkflowRepository {
       versionNumber: Number(row.version_number),
       workflowId: row.workflow_id,
     };
+  }
+
+  async findLatestVersion(
+    tenantId: string,
+    workflowId: string,
+  ): Promise<WorkflowVersionRecord | undefined> {
+    const rows = (await this.dataSource.query(
+      `
+        SELECT id
+        FROM ${this.versions}
+        WHERE tenant_id = $1 AND workflow_id = $2
+        ORDER BY version_number DESC
+        LIMIT 1
+      `,
+      [tenantId, workflowId],
+    )) as { id: string }[];
+    return rows[0] === undefined
+      ? undefined
+      : this.findVersionById(tenantId, workflowId, rows[0].id);
+  }
+
+  async listByProject(
+    tenantId: string,
+    projectId: string,
+    limit = 50,
+  ): Promise<readonly WorkflowRecord[]> {
+    if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
+      throw new Error('WORKFLOW_LIST_LIMIT_INVALID');
+    }
+    const rows = (await this.dataSource.query(
+      `
+        SELECT
+          id, tenant_id, project_id, name, status, active_version_id,
+          accepting_new_documents, health, state_version, created_at, updated_at
+        FROM ${this.workflows}
+        WHERE tenant_id = $1 AND project_id = $2 AND status <> 'ARCHIVED'
+        ORDER BY created_at DESC, id DESC
+        LIMIT $3
+      `,
+      [tenantId, projectId, limit],
+    )) as WorkflowRow[];
+    return rows.map(mapWorkflow);
   }
 
   private async appendAudit(

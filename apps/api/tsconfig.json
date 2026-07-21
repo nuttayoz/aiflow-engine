@@ -10,8 +10,15 @@
   "exclude": ["src/**/*.spec.ts"],
   "references": [
     { "path": "../../packages/config" },
+    { "path": "../../packages/connectors/direct-upload" },
+    { "path": "../../packages/connectors/microsoft-business-central" },
+    { "path": "../../packages/connector-sdk" },
     { "path": "../../packages/core" },
     { "path": "../../packages/database" },
-    { "path": "../../packages/observability" }
+    { "path": "../../packages/executions" },
+    { "path": "../../packages/extraction" },
+    { "path": "../../packages/observability" },
+    { "path": "../../packages/storage" },
+    { "path": "../../packages/workflows" }
   ]
 }

@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AiFlow Engine — Phase 2</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header>
+      <div>
+        <p class="eyebrow">Internal proof harness</p>
+        <h1>AiFlow Engine</h1>
+      </div>
+      <span id="connection" class="pill">Checking engine…</span>
+    </header>
+
+    <main>
+      <aside>
+        <button class="nav active" data-view="workflows">Workflows</button>
+        <button class="nav" data-view="create">Create workflow</button>
+        <button class="nav" data-view="upload">Upload document</button>
+        <div class="identity">
+          <span>Local identity</span>
+          <strong>demo-user-a</strong>
+          <small>demo-project-a</small>
+        </div>
+      </aside>
+
+      <section class="content">
+        <div id="notice" class="notice hidden"></div>
+
+        <article id="workflows" class="view">
+          <div class="title-row">
+            <div>
+              <p class="eyebrow">Project</p>
+              <h2>Workflows</h2>
+            </div>
+            <button id="refresh" class="secondary">Refresh</button>
+          </div>
+          <div id="workflow-list" class="cards"></div>
+        </article>
+
+        <article id="create" class="view hidden">
+          <p class="eyebrow">Three-step setup</p>
+          <h2>Create an invoice workflow</h2>
+          <div class="steps">
+            <span class="step active">1. Extraction</span>
+            <span class="step">2. Destination</span>
+            <span class="step">3. Confirm</span>
+          </div>
+          <form id="wizard">
+            <fieldset data-step="0">
+              <label
+                >Workflow name<input
+                  id="workflow-name"
+                  value="Invoice intake"
+                  required
+              /></label>
+              <label
+                >Extraction profile<select disabled>
+                  <option>Basic invoice</option>
+                </select></label
+              >
+              <p class="hint">
+                Entry: direct browser upload to immutable S3 storage.
+              </p>
+            </fieldset>
+            <fieldset data-step="1" class="hidden">
+              <label
+                >Destination<select disabled>
+                  <option>Microsoft Dynamics 365 Business Central</option>
+                </select></label
+              >
+              <label
+                >Company ID<input id="company-id" value="demo-company" required
+              /></label>
+              <p class="hint">
+                Action: create a purchase invoice draft. Review is disabled in
+                Phase 2.
+              </p>
+            </fieldset>
+            <fieldset data-step="2" class="hidden">
+              <div id="summary" class="summary"></div>
+              <p class="hint">
+                Create saves an immutable definition, then activation runs
+                independently.
+              </p>
+            </fieldset>
+            <div class="actions">
+              <button id="back" type="button" class="secondary" disabled>
+                Back
+              </button>
+              <button id="next" type="button">Continue</button>
+              <button id="create-submit" type="submit" class="hidden">
+                Create & activate
+              </button>
+            </div>
+          </form>
+        </article>
+
+        <article id="upload" class="view hidden">
+          <p class="eyebrow">Direct upload</p>
+          <h2>Process a document</h2>
+          <form id="upload-form">
+            <label
+              >Active workflow<select id="upload-workflow" required></select
+            ></label>
+            <label class="drop"
+              >Document<input id="document" type="file" required
+            /></label>
+            <button type="submit">Upload & process</button>
+          </form>
+          <section id="execution" class="execution hidden">
+            <div class="title-row">
+              <h3>Execution</h3>
+              <span id="execution-status" class="pill"></span>
+            </div>
+            <div id="stages" class="stage-grid"></div>
+            <pre id="failure" class="hidden"></pre>
+            <button id="retry" class="secondary hidden">Retry safely</button>
+          </section>
+        </article>
+      </section>
+    </main>
+    <script src=".dist/app.js"></script>
+  </body>
+</html>

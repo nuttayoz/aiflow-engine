@@ -26,6 +26,77 @@ export interface DeleteObjectInput {
   readonly versionId: string;
 }
 
+export interface UploadCapability {
+  readonly expiresAt: Date;
+  readonly headers: Readonly<Record<string, string>>;
+  readonly method: 'PUT';
+  readonly url: string;
+}
+
+export interface DirectUploadObjectTarget {
+  readonly storageObjectId: string;
+  readonly tenantId: string;
+}
+
+export interface CreateSinglePutCapabilityInput extends DirectUploadObjectTarget {
+  readonly checksumValue: string;
+  readonly contentLength: number;
+  readonly contentType: string;
+  readonly expiresInSeconds: number;
+}
+
+export interface CreateMultipartUploadInput extends DirectUploadObjectTarget {
+  readonly contentType: string;
+}
+
+export interface CreateMultipartPartCapabilityInput extends DirectUploadObjectTarget {
+  readonly checksumValue: string;
+  readonly contentLength: number;
+  readonly expiresInSeconds: number;
+  readonly partNumber: number;
+  readonly uploadReference: string;
+}
+
+export interface MultipartPartReceipt {
+  readonly checksumValue: string;
+  readonly etag: string;
+  readonly partNumber: number;
+}
+
+export interface CompleteMultipartUploadInput extends DirectUploadObjectTarget {
+  readonly parts: readonly MultipartPartReceipt[];
+  readonly sizeBytes: number;
+  readonly uploadReference: string;
+}
+
+export interface CompleteMultipartUploadResult {
+  readonly checksum: StorageChecksum;
+  readonly versionId: string;
+}
+
+export interface DirectUploadStoragePort {
+  abortMultipartUpload(input: {
+    readonly storageObjectId: string;
+    readonly tenantId: string;
+    readonly uploadReference: string;
+  }): Promise<void>;
+  completeMultipartUpload(
+    input: CompleteMultipartUploadInput,
+  ): Promise<CompleteMultipartUploadResult>;
+  createMultipartPartCapability(
+    input: CreateMultipartPartCapabilityInput,
+  ): Promise<UploadCapability>;
+  createMultipartUpload(
+    input: CreateMultipartUploadInput,
+  ): Promise<{ readonly uploadReference: string }>;
+  createSinglePutCapability(
+    input: CreateSinglePutCapabilityInput,
+  ): Promise<UploadCapability>;
+  inspectUpload(
+    input: DirectUploadObjectTarget & { readonly versionId?: string },
+  ): Promise<StoredObjectMetadata | undefined>;
+}
+
 export interface ObjectStoragePort {
   deleteExactVersion(input: DeleteObjectInput): Promise<void>;
   headExactVersion(input: {

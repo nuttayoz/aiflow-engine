@@ -3,6 +3,7 @@ import { Module, type DynamicModule } from '@nestjs/common';
 import type {
   DatabaseRuntimeConfig,
   RabbitMqRuntimeConfig,
+  S3RuntimeConfig,
 } from '@aiflow/config';
 import { DatabaseModule } from '@aiflow/database';
 import {
@@ -13,12 +14,17 @@ import {
 import { RuntimeTelemetry } from '@aiflow/observability';
 
 import { FoundationWorkerService } from './foundation-worker.service';
-import { SYNTHETIC_STAGES_ENABLED, WORKER_QUEUE_NAMES } from './worker.tokens';
+import {
+  SYNTHETIC_STAGES_ENABLED,
+  WORKER_QUEUE_NAMES,
+  WORKER_S3_CONFIG,
+} from './worker.tokens';
 
 export interface WorkerModuleOptions {
   database: DatabaseRuntimeConfig;
   queueNames: readonly string[];
   rabbitMq: RabbitMqRuntimeConfig;
+  s3: S3RuntimeConfig;
   syntheticStagesEnabled: boolean;
   telemetry: RuntimeTelemetry;
 }
@@ -32,6 +38,7 @@ export class WorkerModule {
         MessagingModule.register({
           bindings: [
             ...CORE_QUEUE_BINDINGS,
+            connectorQueueBinding('microsoft-business-central', 'deliver'),
             connectorQueueBinding('phase1-synthetic', 'deliver'),
           ],
           config: options.rabbitMq,
@@ -42,6 +49,7 @@ export class WorkerModule {
         FoundationWorkerService,
         { provide: RuntimeTelemetry, useValue: options.telemetry },
         { provide: WORKER_QUEUE_NAMES, useValue: options.queueNames },
+        { provide: WORKER_S3_CONFIG, useValue: options.s3 },
         {
           provide: SYNTHETIC_STAGES_ENABLED,
           useValue: options.syntheticStagesEnabled,

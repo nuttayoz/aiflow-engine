@@ -5,12 +5,20 @@
   "main": "dist/main.js",
   "dependencies": {
     "@aiflow/config": "workspace:*",
+    "@aiflow/connector-direct-upload": "workspace:*",
+    "@aiflow/connector-microsoft-business-central": "workspace:*",
+    "@aiflow/connector-sdk": "workspace:*",
     "@aiflow/core": "workspace:*",
     "@aiflow/database": "workspace:*",
+    "@aiflow/executions": "workspace:*",
+    "@aiflow/extraction": "workspace:*",
     "@aiflow/observability": "workspace:*",
+    "@aiflow/storage": "workspace:*",
+    "@aiflow/workflows": "workspace:*",
     "@nestjs/common": "11.1.28",
     "@nestjs/core": "11.1.28",
     "@nestjs/platform-express": "11.1.28",
+    "@types/express": "5.0.6",
     "reflect-metadata": "0.2.2",
     "rxjs": "7.8.2"
   }

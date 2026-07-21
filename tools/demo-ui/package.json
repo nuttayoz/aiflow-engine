@@ -1,0 +1,8 @@
+{
+  "name": "@aiflow/demo-ui",
+  "version": "0.1.0",
+  "private": true,
+  "dependencies": {
+    "@aiflow/api-client": "workspace:*"
+  }
+}
