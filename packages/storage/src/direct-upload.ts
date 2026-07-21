@@ -30,6 +30,7 @@ export const DEFAULT_DIRECT_UPLOAD_POLICY: DirectUploadPolicy = Object.freeze({
 export type DirectUploadApplicationErrorCode =
   | 'DIRECT_UPLOAD_POLICY_INVALID'
   | 'UPLOAD_SESSION_EXPIRED'
+  | 'UPLOAD_SESSION_MULTIPART_NOT_READY'
   | 'UPLOAD_SESSION_NOT_ACTIVE'
   | 'UPLOAD_SESSION_SIZE_INVALID'
   | 'UPLOAD_SESSION_SIZE_LIMIT_EXCEEDED';
@@ -66,6 +67,17 @@ export interface CreateDirectUploadInput {
 export interface CreateDirectUploadResult {
   readonly expiresAt: Date;
   readonly plan: BrowserUploadPlan;
+  readonly uploadSessionId: string;
+}
+
+export interface IssueMultipartPartCapabilityInput {
+  readonly actor: ActorIdentity;
+  readonly causationId: string;
+  readonly checksumValue: string;
+  readonly contentLength: number;
+  readonly correlationId: string;
+  readonly partNumber: number;
+  readonly tenantId: string;
   readonly uploadSessionId: string;
 }
 
@@ -168,6 +180,31 @@ export class DirectUploadService {
       plan: { ...capability, type: 'SINGLE_PUT' },
       uploadSessionId: active.id,
     };
+  }
+
+  async issueMultipartPartCapability(
+    input: IssueMultipartPartCapabilityInput,
+  ): Promise<UploadCapability> {
+    const pinned = await this.sessions.pinPart(input);
+    const uploadReference = pinned.session.multipartUploadReference;
+    if (
+      pinned.session.plan.type !== 'MULTIPART' ||
+      uploadReference === undefined
+    ) {
+      throw new DirectUploadApplicationError(
+        'UPLOAD_SESSION_MULTIPART_NOT_READY',
+      );
+    }
+    const expiresInSeconds = this.capabilityLifetime(pinned.session);
+    return this.storage.createMultipartPartCapability({
+      checksumValue: pinned.part.checksum.value,
+      contentLength: pinned.part.sizeBytes,
+      expiresInSeconds,
+      partNumber: pinned.part.partNumber,
+      storageObjectId: pinned.session.storageObjectId,
+      tenantId: pinned.session.tenantId,
+      uploadReference,
+    });
   }
 
   private capabilityLifetime(session: UploadSessionRecord): number {

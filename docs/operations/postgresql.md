@@ -71,11 +71,11 @@ API, worker, and scheduler load only `DATABASE_URL`. They never receive or fall 
 
 ## Rollout and recovery
 
-The foundation schema and Phase 2 upload-session schema use additive
-transactional migrations with no data backfill. The upload-session migration
-adds one table, tenant-scoped foreign keys, lifecycle guards, and partial indexes
-for active-session quotas and expiry scans. It does not lock or rewrite an
-existing application table for a backfill.
+The foundation schema and Phase 2 upload-session schemas use additive
+transactional migrations with no data backfill. The upload-session migrations
+add the session and immutable multipart-part tables, tenant-scoped foreign keys,
+lifecycle guards, and partial indexes for active-session quotas and expiry
+scans. They do not lock or rewrite an existing application table for a backfill.
 
 Production rollout order:
 
@@ -88,7 +88,8 @@ For the upload-session migration, deploy in expand-first order: run the
 migration while Phase 1 processes are still running, then deploy Phase 2 code.
 Phase 1 processes do not query the new table, so mixed-version operation is safe.
 Before enabling the upload API, verify the runtime identity can select, insert,
-and update `upload_sessions` through its normal default table privileges.
+and update `upload_sessions` and can select and insert
+`upload_session_parts` through its normal default table privileges.
 
 Rollback uses the previous application image. Do not automatically run
 destructive down migrations. The `aiflow` schema and TypeORM migration history

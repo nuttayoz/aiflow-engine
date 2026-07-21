@@ -196,6 +196,11 @@ single/multipart plan, expected file metadata and full-content checksum, guarded
 status, expiry, confidential multipart reference, and eventual immutable
 document/execution identity.
 
+`upload_session_parts` stores immutable multipart expectations: tenant/session,
+consecutive part number, exact server-derived size, SHA-256 value, and creation
+time. Presigned URLs, query strings, upload IDs, and document bytes are never
+stored in these rows.
+
 `documents` stores accepted document identity and metadata: tenant/project, source connector and source identity, source `storage_object_id`, S3-verified checksum/size snapshot, optional full-content SHA-256 plus verification state, original safe filename, and staging time.
 
 Rules:
@@ -207,6 +212,8 @@ Rules:
   there is no unverified `UPLOADED` database state.
 - `(tenant_id, storage_object_id)`, completed `(tenant_id, document_id)`, and
   completed `(tenant_id, execution_id)` are unique.
+- `(tenant_id, upload_session_id, part_number)` is unique. An identical checksum
+  refresh reuses the pinned row; a different size or checksum is rejected.
 - Abort/expiry and storage abandonment commit atomically. Completion later
   commits storage availability, document, execution, outbox, idempotency, and
   audit state atomically after exact-object verification.

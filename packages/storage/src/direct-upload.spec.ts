@@ -60,6 +60,7 @@ const repository = (): jest.Mocked<UploadSessionRepository> => ({
   create: jest.fn(),
   expire: jest.fn(),
   findById: jest.fn(),
+  pinPart: jest.fn(),
 });
 
 const objectStorage = (): jest.Mocked<DirectUploadStoragePort> => ({
@@ -312,5 +313,69 @@ describe('direct upload application service', () => {
     expect(storage.abortMultipartUpload).toHaveBeenCalledWith(
       expect.objectContaining({ uploadReference: 'extra-reference' }),
     );
+  });
+
+  it('issues a capability from the durable pinned multipart values', async () => {
+    const sessions = repository();
+    const storage = objectStorage();
+    const multipart = session(
+      { partCount: 3, partSizeBytes: 16, type: 'MULTIPART' },
+      {
+        multipartUploadReference: 'internal-reference',
+        sizeBytes: 40,
+        stateVersion: 1,
+      },
+    );
+    sessions.pinPart.mockResolvedValue({
+      part: {
+        checksum: { algorithm: 'SHA256', value: checksum },
+        createdAt: now,
+        partNumber: 3,
+        sizeBytes: 8,
+        tenantId: multipart.tenantId,
+        uploadSessionId: multipart.id,
+      },
+      session: multipart,
+    });
+    storage.createMultipartPartCapability.mockResolvedValue({
+      expiresAt: new Date(now.getTime() + 15 * 60 * 1_000),
+      headers: { 'x-amz-checksum-sha256': checksum },
+      method: 'PUT',
+      url: 'https://storage.example/part',
+    });
+    const service = new DirectUploadService(
+      sessions,
+      storage,
+      DEFAULT_DIRECT_UPLOAD_POLICY,
+      () => now,
+      idGenerator(),
+    );
+    const request = {
+      actor: input.actor,
+      causationId: input.causationId,
+      checksumValue: checksum,
+      contentLength: 8,
+      correlationId: input.correlationId,
+      partNumber: 3,
+      tenantId: input.tenantId,
+      uploadSessionId: multipart.id,
+    };
+
+    await expect(
+      service.issueMultipartPartCapability(request),
+    ).resolves.toMatchObject({
+      method: 'PUT',
+      url: 'https://storage.example/part',
+    });
+    expect(sessions.pinPart).toHaveBeenCalledWith(request);
+    expect(storage.createMultipartPartCapability).toHaveBeenCalledWith({
+      checksumValue: checksum,
+      contentLength: 8,
+      expiresInSeconds: 15 * 60,
+      partNumber: 3,
+      storageObjectId: multipart.storageObjectId,
+      tenantId: multipart.tenantId,
+      uploadReference: 'internal-reference',
+    });
   });
 });

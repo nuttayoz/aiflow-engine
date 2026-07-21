@@ -7,9 +7,14 @@ import {
   attachMultipartUpload,
   buildStorageObjectKey,
   createUploadSessionLifecycle,
+  createUploadSessionPart,
   expireUploadSession,
+  reconcileUploadSessionPart,
   type CreateUploadSessionInput,
+  type PinUploadSessionPartInput,
+  type PinUploadSessionPartResult,
   type UploadPlan,
+  type UploadSessionPartRecord,
   type UploadSessionMutationInput,
   type UploadSessionRecord,
   type UploadSessionRepository,
@@ -42,6 +47,16 @@ interface UploadSessionRow {
   updated_at: Date | string;
   workflow_id: string;
   workflow_version_id: string;
+}
+
+interface UploadSessionPartRow {
+  checksum_algorithm: 'SHA256';
+  checksum_value: string;
+  created_at: Date | string;
+  part_number: number | string;
+  size_bytes: number | string;
+  tenant_id: string;
+  upload_session_id: string;
 }
 
 const columns = `
@@ -109,6 +124,28 @@ const mapSession = (row: UploadSessionRow): UploadSessionRecord => ({
   workflowVersionId: row.workflow_version_id,
 });
 
+const partColumns = `
+  tenant_id,
+  upload_session_id,
+  part_number,
+  size_bytes,
+  checksum_algorithm,
+  checksum_value,
+  created_at
+`;
+
+const mapPart = (row: UploadSessionPartRow): UploadSessionPartRecord => ({
+  checksum: {
+    algorithm: row.checksum_algorithm,
+    value: row.checksum_value,
+  },
+  createdAt: new Date(row.created_at),
+  partNumber: Number(row.part_number),
+  sizeBytes: Number(row.size_bytes),
+  tenantId: row.tenant_id,
+  uploadSessionId: row.upload_session_id,
+});
+
 const requestFingerprint = (input: CreateUploadSessionInput): string =>
   createHash('sha256')
     .update(
@@ -136,6 +173,7 @@ type CloseKind = 'ABORTED' | 'EXPIRED';
 export class PostgresUploadSessionRepository implements UploadSessionRepository {
   private readonly auditEvents: string;
   private readonly idempotency: string;
+  private readonly parts: string;
   private readonly sessions: string;
   private readonly storageObjects: string;
   private readonly versions: string;
@@ -147,6 +185,7 @@ export class PostgresUploadSessionRepository implements UploadSessionRepository 
   ) {
     this.auditEvents = table(schema, 'audit_events');
     this.idempotency = table(schema, 'idempotency_records');
+    this.parts = table(schema, 'upload_session_parts');
     this.sessions = table(schema, 'upload_sessions');
     this.storageObjects = table(schema, 'storage_objects');
     this.versions = table(schema, 'workflow_versions');
@@ -306,6 +345,71 @@ export class PostgresUploadSessionRepository implements UploadSessionRepository 
       [tenantId, uploadSessionId],
     )) as UploadSessionRow[];
     return rows[0] === undefined ? undefined : mapSession(rows[0]);
+  }
+
+  async pinPart(
+    input: PinUploadSessionPartInput,
+  ): Promise<PinUploadSessionPartResult> {
+    return this.dataSource.transaction(async (manager) => {
+      const current = await this.lock(manager, input);
+      const candidate = createUploadSessionPart(current.session, {
+        checksumValue: input.checksumValue,
+        contentLength: input.contentLength,
+        now: current.now,
+        partNumber: input.partNumber,
+      });
+      const inserted = mutationRows<UploadSessionPartRow>(
+        await manager.query(
+          `
+            INSERT INTO ${this.parts} (
+              tenant_id,
+              upload_session_id,
+              part_number,
+              size_bytes,
+              checksum_algorithm,
+              checksum_value,
+              created_at
+            ) VALUES ($1, $2, $3, $4, 'SHA256', $5, $6)
+            ON CONFLICT (tenant_id, upload_session_id, part_number) DO NOTHING
+            RETURNING ${partColumns}
+          `,
+          [
+            candidate.tenantId,
+            candidate.uploadSessionId,
+            candidate.partNumber,
+            candidate.sizeBytes,
+            candidate.checksum.value,
+            candidate.createdAt,
+          ],
+        ),
+      );
+      if (inserted[0] !== undefined) {
+        await this.appendAudit(
+          manager,
+          { ...input, projectId: current.session.projectId },
+          'upload-session.part-pinned',
+        );
+        return { part: mapPart(inserted[0]), session: current.session };
+      }
+
+      const existing = (await manager.query(
+        `
+          SELECT ${partColumns}
+          FROM ${this.parts}
+          WHERE tenant_id = $1
+            AND upload_session_id = $2
+            AND part_number = $3
+        `,
+        [input.tenantId, input.uploadSessionId, input.partNumber],
+      )) as UploadSessionPartRow[];
+      if (existing[0] === undefined) {
+        throw new Error('UPLOAD_SESSION_PART_PIN_INCONSISTENT');
+      }
+      return {
+        part: reconcileUploadSessionPart(mapPart(existing[0]), candidate),
+        session: current.session,
+      };
+    });
   }
 
   async attachMultipartUpload(

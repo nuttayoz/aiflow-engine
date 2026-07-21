@@ -194,6 +194,8 @@ Implemented:
 - Direct-upload application planning with server-owned size limits, automatic
   single/multipart selection, durable multipart binding, and safe retry
   reconciliation that never exposes the storage upload reference.
+- Immutable multipart-part checksum/size pinning with exact final-part sizing,
+  idempotent capability refresh, tenant isolation, and changed-file rejection.
 
 Scope:
 

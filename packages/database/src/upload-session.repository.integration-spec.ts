@@ -275,6 +275,49 @@ describe('PostgreSQL upload sessions', () => {
       sessions.attachMultipartUpload(mutation),
     ).resolves.toMatchObject({ stateVersion: 1 });
 
+    const partChecksum = Buffer.alloc(32, 8).toString('base64');
+    const partInput = {
+      actor: input.actor,
+      causationId: randomUUID(),
+      checksumValue: partChecksum,
+      contentLength: 512,
+      correlationId: randomUUID(),
+      partNumber: 1,
+      tenantId,
+      uploadSessionId: created.id,
+    };
+    const pinned = await sessions.pinPart(partInput);
+    expect(pinned).toMatchObject({
+      part: {
+        checksum: { algorithm: 'SHA256', value: partChecksum },
+        partNumber: 1,
+        sizeBytes: 512,
+      },
+      session: { id: created.id, stateVersion: 1 },
+    });
+    await expect(sessions.pinPart(partInput)).resolves.toMatchObject({
+      part: { checksum: { value: partChecksum }, partNumber: 1 },
+    });
+    await expect(
+      sessions.pinPart({
+        ...partInput,
+        checksumValue: Buffer.alloc(32, 9).toString('base64'),
+      }),
+    ).rejects.toThrow('UPLOAD_PART_CONFLICT');
+    await expect(
+      sessions.pinPart({
+        ...partInput,
+        contentLength: 512,
+        partNumber: 3,
+      }),
+    ).rejects.toThrow('UPLOAD_PART_SIZE_MISMATCH');
+    await expect(
+      sessions.pinPart({
+        ...partInput,
+        tenantId: 'different-tenant',
+      }),
+    ).rejects.toThrow('UPLOAD_SESSION_NOT_FOUND');
+
     const aborted = await sessions.abort({
       ...mutation,
       expectedStateVersion: attached.stateVersion,
