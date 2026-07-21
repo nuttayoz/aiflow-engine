@@ -3,7 +3,10 @@ import {
   loadApiRuntimeConfig,
   loadDatabaseMigrationConfig,
   loadDatabaseRuntimeConfig,
+  loadObservabilityRuntimeConfig,
+  loadRabbitMqRuntimeConfig,
   loadRuntimeConfig,
+  loadS3RuntimeConfig,
 } from './index';
 
 describe('runtime configuration', () => {
@@ -110,5 +113,85 @@ describe('database runtime configuration', () => {
         DATABASE_URL: databaseUrl,
       }),
     ).toThrow('DATABASE_POOL_MAX must be an integer between 1 and 100');
+  });
+});
+
+describe('RabbitMQ runtime configuration', () => {
+  it('loads bounded local broker settings', () => {
+    expect(
+      loadRabbitMqRuntimeConfig({
+        NODE_ENV: 'development',
+        RABBITMQ_PREFETCH: '25',
+        RABBITMQ_URL: 'amqp://user:secret@localhost:55672/aiflow',
+      }),
+    ).toMatchObject({ prefetch: 25 });
+  });
+
+  it('requires TLS in production without disclosing credentials', () => {
+    expect(() =>
+      loadRabbitMqRuntimeConfig({
+        NODE_ENV: 'production',
+        RABBITMQ_URL: 'amqp://user:super-secret@rabbitmq/aiflow',
+      }),
+    ).toThrow('RABBITMQ_URL must be a valid TLS RabbitMQ URL');
+  });
+});
+
+describe('S3 runtime configuration', () => {
+  it('loads the local S3-compatible endpoint without accepting secrets', () => {
+    expect(
+      loadS3RuntimeConfig({
+        S3_BUCKET: 'aiflow-local',
+        S3_ENDPOINT: 'http://localhost:55674',
+        S3_REGION: 'us-east-1',
+      }),
+    ).toEqual({
+      allowChecksumMetadataFallback: false,
+      bucket: 'aiflow-local',
+      encryptionMode: 'AES256',
+      endpoint: 'http://localhost:55674',
+      forcePathStyle: true,
+      region: 'us-east-1',
+      requestTimeoutMs: 30000,
+    });
+  });
+
+  it('requires KMS and TLS-compatible settings in production', () => {
+    expect(() =>
+      loadS3RuntimeConfig({
+        NODE_ENV: 'production',
+        S3_BUCKET: 'aiflow-production',
+        S3_REGION: 'ap-southeast-1',
+      }),
+    ).toThrow('S3_KMS_KEY_ID is required for aws:kms');
+
+    expect(() =>
+      loadS3RuntimeConfig({
+        NODE_ENV: 'production',
+        S3_BUCKET: 'aiflow-production',
+        S3_ENDPOINT: 'http://s3.internal',
+        S3_KMS_KEY_ID: 'alias/aiflow',
+        S3_REGION: 'ap-southeast-1',
+      }),
+    ).toThrow('S3_ENDPOINT must be a valid HTTPS URL');
+  });
+});
+
+describe('observability runtime configuration', () => {
+  it('uses separate local metrics ports for independently run roles', () => {
+    expect(loadObservabilityRuntimeConfig('api', {}).metricsPort).toBe(9464);
+    expect(loadObservabilityRuntimeConfig('worker', {}).metricsPort).toBe(9465);
+    expect(loadObservabilityRuntimeConfig('scheduler', {}).metricsPort).toBe(
+      9466,
+    );
+  });
+
+  it('rejects a non-TLS production Sentry DSN without echoing it', () => {
+    expect(() =>
+      loadObservabilityRuntimeConfig('api', {
+        NODE_ENV: 'production',
+        SENTRY_DSN: 'http://public:secret@sentry.example/1',
+      }),
+    ).toThrow('SENTRY_DSN must be a valid HTTPS URL');
   });
 });
