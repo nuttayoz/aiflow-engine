@@ -1,6 +1,8 @@
 # PostgreSQL Operations
 
-This runbook covers the Phase 1 PostgreSQL foundation. PostgreSQL is authoritative for future engine state, but this slice intentionally creates no domain tables.
+This runbook covers the Phase 1 PostgreSQL foundation. PostgreSQL is
+authoritative for workflow, provisioning, storage metadata, document, execution,
+idempotency, inbox/outbox, audit, and scheduler state.
 
 ## Local development
 
@@ -52,8 +54,11 @@ Locally, `bun run db:migrate` builds first and invokes that command. The migrati
 1. loads only `DATABASE_MIGRATION_URL`;
 2. creates the validated engine schema when absent;
 3. initializes the TypeORM migration data source with `synchronize: false` and `migrationsRun: false`;
-4. applies the ordered migration stream transactionally;
-5. closes the migration connection and emits only migration names/counts.
+4. holds one schema-specific PostgreSQL advisory lock to prevent concurrent
+   migration commands;
+5. applies the ordered migration stream transactionally;
+6. releases the lock, closes the migration connection, and emits only migration
+   names/counts.
 
 API, worker, and scheduler load only `DATABASE_URL`. They never receive or fall back to migration credentials. Runtime startup initializes one bounded pool per process and fails closed when PostgreSQL is unavailable.
 
@@ -66,7 +71,9 @@ API, worker, and scheduler load only `DATABASE_URL`. They never receive or fall 
 
 ## Rollout and recovery
 
-This slice adds the migration mechanism and dependency health boundary but no domain table migration or backfill.
+The foundation schema is an additive transactional migration with no data
+backfill. It creates the Phase 1 domain tables, composite tenant foreign keys,
+state guards, and known-query indexes.
 
 Production rollout order:
 
@@ -75,6 +82,10 @@ Production rollout order:
 3. API, worker, and scheduler roll out with the runtime identity.
 4. Readiness and pool metrics are observed before increasing replicas.
 
-Rollback uses the previous application image. Do not automatically run destructive down migrations. The `aiflow` schema and TypeORM migration history remain in place for forward repair or the next compatible image. A future persistent migration must add its own lock/performance, mixed-version, backfill, and recovery instructions before merge.
+Rollback uses the previous application image. Do not automatically run
+destructive down migrations. The `aiflow` schema and TypeORM migration history
+remain in place for forward repair or the next compatible image. Each later
+persistent migration must add its own lock/performance, mixed-version, backfill,
+and recovery instructions before merge.
 
 For a failed migration, stop the rollout, retain the database state and migration logs, determine whether PostgreSQL committed the transaction, then use the migration-specific forward repair or approved restore procedure. Never edit the migration-history table manually.

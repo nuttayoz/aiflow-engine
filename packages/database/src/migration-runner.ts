@@ -56,7 +56,24 @@ export const runDatabaseMigrations = async (
 
   try {
     await dataSource.initialize();
-    return await dataSource.runMigrations({ transaction: 'all' });
+    const lock = dataSource.createQueryRunner();
+    await lock.connect();
+    try {
+      await lock.query(
+        "SELECT pg_advisory_lock(hashtext('aiflow-engine-migrate'), hashtext($1))",
+        [config.schema],
+      );
+      return await dataSource.runMigrations({ transaction: 'all' });
+    } finally {
+      try {
+        await lock.query(
+          "SELECT pg_advisory_unlock(hashtext('aiflow-engine-migrate'), hashtext($1))",
+          [config.schema],
+        );
+      } finally {
+        await lock.release();
+      }
+    }
   } finally {
     if (dataSource.isInitialized) {
       await dataSource.destroy();

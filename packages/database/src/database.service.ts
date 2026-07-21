@@ -21,6 +21,14 @@ export class DatabaseService
     readonly dataSource: DataSource,
   ) {}
 
+  get schema(): string {
+    const options = this.dataSource.options;
+    if ('schema' in options && typeof options.schema === 'string') {
+      return options.schema;
+    }
+    throw new Error('DATABASE_SCHEMA_MISSING');
+  }
+
   async onApplicationBootstrap(): Promise<void> {
     if (!this.dataSource.isInitialized) {
       await this.dataSource.initialize();
