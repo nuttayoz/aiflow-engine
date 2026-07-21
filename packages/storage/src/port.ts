@@ -26,6 +26,72 @@ export interface DeleteObjectInput {
   readonly versionId: string;
 }
 
+export interface UploadCapability {
+  readonly expiresAt: Date;
+  readonly headers: Readonly<Record<string, string>>;
+  readonly method: 'PUT';
+  readonly url: string;
+}
+
+export interface CreateSinglePutCapabilityInput {
+  readonly checksumValue: string;
+  readonly contentLength: number;
+  readonly contentType: string;
+  readonly expiresInSeconds: number;
+  readonly key: string;
+}
+
+export interface CreateMultipartUploadInput {
+  readonly contentType: string;
+  readonly key: string;
+}
+
+export interface CreateMultipartPartCapabilityInput {
+  readonly checksumValue: string;
+  readonly contentLength: number;
+  readonly expiresInSeconds: number;
+  readonly key: string;
+  readonly partNumber: number;
+  readonly uploadReference: string;
+}
+
+export interface MultipartPartReceipt {
+  readonly checksumValue: string;
+  readonly etag: string;
+  readonly partNumber: number;
+}
+
+export interface CompleteMultipartUploadInput {
+  readonly key: string;
+  readonly parts: readonly MultipartPartReceipt[];
+  readonly sizeBytes: number;
+  readonly uploadReference: string;
+}
+
+export interface CompleteMultipartUploadResult {
+  readonly checksum: StorageChecksum;
+  readonly versionId: string;
+}
+
+export interface DirectUploadStoragePort {
+  abortMultipartUpload(input: {
+    readonly key: string;
+    readonly uploadReference: string;
+  }): Promise<void>;
+  completeMultipartUpload(
+    input: CompleteMultipartUploadInput,
+  ): Promise<CompleteMultipartUploadResult>;
+  createMultipartPartCapability(
+    input: CreateMultipartPartCapabilityInput,
+  ): Promise<UploadCapability>;
+  createMultipartUpload(
+    input: CreateMultipartUploadInput,
+  ): Promise<{ readonly uploadReference: string }>;
+  createSinglePutCapability(
+    input: CreateSinglePutCapabilityInput,
+  ): Promise<UploadCapability>;
+}
+
 export interface ObjectStoragePort {
   deleteExactVersion(input: DeleteObjectInput): Promise<void>;
   headExactVersion(input: {

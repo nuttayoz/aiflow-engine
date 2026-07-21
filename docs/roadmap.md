@@ -15,7 +15,8 @@ This roadmap controls implementation order. A phase starts only after its entry 
 | Phase 5  | Templates and review               | Not started   |
 | Phase 6  | Migration, cutover, and retirement | Not started   |
 
-No Phase 2 or later product behavior is implemented.
+Phase 2 is under active implementation. Phase 3 and later product behavior is
+not implemented.
 
 ## Phase 0A: repository skeleton
 
@@ -187,6 +188,9 @@ Implemented:
 - Additive PostgreSQL upload-session schema plus tenant-scoped, idempotent
   reservation, multipart binding, abort, expiry, audit, and storage-abandonment
   persistence.
+- Provider-neutral direct-upload storage capabilities backed by checksum-bound,
+  short-lived S3 single-PUT and multipart URLs, conditional completion, and
+  explicit multipart abort.
 
 Scope:
 

@@ -3,6 +3,7 @@ import { Readable } from 'node:stream';
 
 import {
   CreateBucketCommand,
+  GetObjectCommand,
   PutBucketVersioningCommand,
   S3Client,
 } from '@aws-sdk/client-s3';
@@ -123,5 +124,179 @@ describe('S3 object storage contract', () => {
     await expect(
       storage.headExactVersion({ key, versionId: stored.versionId }),
     ).resolves.toBeUndefined();
+  });
+
+  it('issues a short-lived checksum-bound single PUT capability', async () => {
+    const body = Buffer.from('phase-two-browser-upload');
+    const key = buildStorageObjectKey('tenant-browser', randomUUID());
+    const checksumValue = checksum(body);
+    const capability = await storage.createSinglePutCapability({
+      checksumValue,
+      contentLength: body.length,
+      contentType: 'application/pdf',
+      expiresInSeconds: 60,
+      key,
+    });
+
+    expect(capability).toMatchObject({
+      headers: {
+        'content-type': 'application/pdf',
+        'if-none-match': '*',
+        'x-amz-checksum-sha256': checksumValue,
+        'x-amz-server-side-encryption': 'AES256',
+      },
+      method: 'PUT',
+    });
+    expect(capability.expiresAt.getTime()).toBeGreaterThan(Date.now());
+    const signedHeaders = new URL(capability.url).searchParams.get(
+      'X-Amz-SignedHeaders',
+    );
+    expect(signedHeaders).toEqual(
+      expect.stringContaining('x-amz-checksum-sha256'),
+    );
+    expect(signedHeaders).toEqual(expect.stringContaining('if-none-match'));
+
+    const uploaded = await fetch(capability.url, {
+      body,
+      headers: capability.headers,
+      method: capability.method,
+    });
+    expect(uploaded.status).toBe(200);
+    const versionId = uploaded.headers.get('x-amz-version-id');
+    expect(versionId).not.toBeNull();
+    if (versionId === null) {
+      throw new Error('TEST_VERSION_MISSING');
+    }
+    await expect(
+      storage.headExactVersion({ key, versionId }),
+    ).resolves.toMatchObject({
+      checksum: {
+        algorithm: 'SHA256',
+        type: 'FULL_OBJECT',
+        value: checksumValue,
+      },
+      sizeBytes: body.length,
+    });
+
+    const duplicate = await fetch(capability.url, {
+      body,
+      headers: capability.headers,
+      method: capability.method,
+    });
+    expect(duplicate.status).toBe(412);
+  });
+
+  it('uploads consecutive checksum-bound parts and completes one version', async () => {
+    const firstPart = Buffer.alloc(5 * 1024 * 1024, 1);
+    const secondPart = Buffer.from('final-part');
+    const parts = [firstPart, secondPart];
+    const key = buildStorageObjectKey('tenant-multipart', randomUUID());
+    const { uploadReference } = await storage.createMultipartUpload({
+      contentType: 'application/pdf',
+      key,
+    });
+    const receipts = [];
+
+    for (const [index, body] of parts.entries()) {
+      const checksumValue = checksum(body);
+      const capability = await storage.createMultipartPartCapability({
+        checksumValue,
+        contentLength: body.length,
+        expiresInSeconds: 60,
+        key,
+        partNumber: index + 1,
+        uploadReference,
+      });
+      expect(
+        new URL(capability.url).searchParams.get('X-Amz-SignedHeaders'),
+      ).toEqual(expect.stringContaining('x-amz-checksum-sha256'));
+      const uploaded = await fetch(capability.url, {
+        body,
+        headers: capability.headers,
+        method: capability.method,
+      });
+      expect(uploaded.status).toBe(200);
+      const etag = uploaded.headers.get('etag');
+      if (etag === null) {
+        throw new Error('TEST_MULTIPART_ETAG_MISSING');
+      }
+      receipts.push({ checksumValue, etag, partNumber: index + 1 });
+    }
+
+    const completed = await storage.completeMultipartUpload({
+      key,
+      parts: receipts,
+      sizeBytes: firstPart.length + secondPart.length,
+      uploadReference,
+    });
+    expect(completed).toMatchObject({
+      checksum: { algorithm: 'SHA256', type: 'COMPOSITE' },
+    });
+    expect(completed.checksum.value).toMatch(/^[A-Za-z0-9+/]{43}=$/u);
+
+    await expect(
+      storage.headExactVersion({ key, versionId: completed.versionId }),
+    ).resolves.toMatchObject({
+      checksum: completed.checksum,
+      sizeBytes: firstPart.length + secondPart.length,
+    });
+    const response = await client.send(
+      new GetObjectCommand({
+        Bucket: bucket,
+        Key: key,
+        VersionId: completed.versionId,
+      }),
+    );
+    if (response.Body === undefined) {
+      throw new Error('TEST_MULTIPART_BODY_MISSING');
+    }
+    expect(Buffer.from(await response.Body.transformToByteArray())).toEqual(
+      Buffer.concat(parts),
+    );
+  });
+
+  it('aborts a multipart upload and rejects unsafe capability inputs', async () => {
+    const key = buildStorageObjectKey('tenant-abort', randomUUID());
+    const { uploadReference } = await storage.createMultipartUpload({
+      contentType: 'application/pdf',
+      key,
+    });
+    await storage.abortMultipartUpload({ key, uploadReference });
+
+    const body = Buffer.from('aborted-part');
+    const capability = await storage.createMultipartPartCapability({
+      checksumValue: checksum(body),
+      contentLength: body.length,
+      expiresInSeconds: 60,
+      key,
+      partNumber: 1,
+      uploadReference,
+    });
+    const upload = await fetch(capability.url, {
+      body,
+      headers: capability.headers,
+      method: capability.method,
+    });
+    expect(upload.ok).toBe(false);
+
+    await expect(
+      storage.createSinglePutCapability({
+        checksumValue: 'invalid',
+        contentLength: body.length,
+        contentType: 'application/pdf',
+        expiresInSeconds: 60,
+        key,
+      }),
+    ).rejects.toThrow('STORAGE_CHECKSUM_INVALID');
+    await expect(
+      storage.createMultipartPartCapability({
+        checksumValue: checksum(body),
+        contentLength: body.length,
+        expiresInSeconds: 901,
+        key,
+        partNumber: 1,
+        uploadReference,
+      }),
+    ).rejects.toThrow('STORAGE_CAPABILITY_LIFETIME_INVALID');
   });
 });

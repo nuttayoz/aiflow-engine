@@ -2,21 +2,33 @@ import { createHash } from 'node:crypto';
 import { Readable, Transform } from 'node:stream';
 
 import {
+  AbortMultipartUploadCommand,
+  CompleteMultipartUploadCommand,
+  CreateMultipartUploadCommand,
   DeleteObjectCommand,
   GetObjectCommand,
   HeadObjectCommand,
   PutObjectCommand,
   S3Client,
+  UploadPartCommand,
 } from '@aws-sdk/client-s3';
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 
 import type { S3RuntimeConfig } from '@aiflow/config';
 
 import { isStorageObjectKey } from './key-policy';
 import type {
   DeleteObjectInput,
+  DirectUploadStoragePort,
+  CompleteMultipartUploadInput,
+  CompleteMultipartUploadResult,
+  CreateMultipartPartCapabilityInput,
+  CreateMultipartUploadInput,
+  CreateSinglePutCapabilityInput,
   ObjectStoragePort,
   PutObjectInput,
   ReadObjectInput,
+  UploadCapability,
 } from './port';
 import type {
   StorageChecksum,
@@ -25,6 +37,8 @@ import type {
 } from './types';
 
 const SHA256_BASE64_PATTERN = /^[A-Za-z0-9+/]{43}=$/u;
+const MAX_CAPABILITY_LIFETIME_SECONDS = 15 * 60;
+const MAX_MULTIPART_PARTS = 10_000;
 
 const assertLocation = (key: string, versionId?: string): void => {
   if (!isStorageObjectKey(key)) {
@@ -45,6 +59,63 @@ const assertChecksum = (checksum: StorageChecksum): void => {
   ) {
     throw new Error('STORAGE_CHECKSUM_INVALID');
   }
+};
+
+const assertPartChecksum = (value: string): void => {
+  if (!SHA256_BASE64_PATTERN.test(value)) {
+    throw new Error('STORAGE_PART_CHECKSUM_INVALID');
+  }
+};
+
+const assertContentLength = (value: number): void => {
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw new Error('STORAGE_CONTENT_LENGTH_INVALID');
+  }
+};
+
+const assertContentType = (value: string): void => {
+  if (
+    value.trim().length === 0 ||
+    value.length > 255 ||
+    /[\r\n]/u.test(value)
+  ) {
+    throw new Error('STORAGE_CONTENT_TYPE_INVALID');
+  }
+};
+
+const assertCapabilityLifetime = (value: number): void => {
+  if (
+    !Number.isInteger(value) ||
+    value < 1 ||
+    value > MAX_CAPABILITY_LIFETIME_SECONDS
+  ) {
+    throw new Error('STORAGE_CAPABILITY_LIFETIME_INVALID');
+  }
+};
+
+const assertUploadReference = (value: string): void => {
+  if (value.trim().length === 0 || value.length > 1_024) {
+    throw new Error('STORAGE_MULTIPART_REFERENCE_INVALID');
+  }
+};
+
+const requiredEncryptionHeaders = (
+  config: S3RuntimeConfig,
+): Readonly<Record<string, string>> => ({
+  'x-amz-server-side-encryption': config.encryptionMode,
+  ...(config.kmsKeyId === undefined
+    ? {}
+    : { 'x-amz-server-side-encryption-aws-kms-key-id': config.kmsKeyId }),
+});
+
+const compositeChecksum = (
+  parts: readonly { readonly checksumValue: string }[],
+): string => {
+  const hash = createHash('sha256');
+  for (const part of parts) {
+    hash.update(Buffer.from(part.checksumValue, 'base64'));
+  }
+  return hash.digest('base64');
 };
 
 const isNotFound = (error: unknown): boolean => {
@@ -93,7 +164,9 @@ const verifyingStream = (
   return source.pipe(verifier);
 };
 
-export class S3ObjectStorage implements ObjectStoragePort {
+export class S3ObjectStorage
+  implements ObjectStoragePort, DirectUploadStoragePort
+{
   private readonly client: S3Client;
 
   constructor(
@@ -164,6 +237,212 @@ export class S3ObjectStorage implements ObjectStoragePort {
       throw new Error('STORAGE_INTEGRITY_MISMATCH');
     }
     return metadata;
+  }
+
+  async createSinglePutCapability(
+    input: CreateSinglePutCapabilityInput,
+  ): Promise<UploadCapability> {
+    assertLocation(input.key);
+    assertChecksum({
+      algorithm: 'SHA256',
+      type: 'FULL_OBJECT',
+      value: input.checksumValue,
+    });
+    assertContentLength(input.contentLength);
+    assertContentType(input.contentType);
+    assertCapabilityLifetime(input.expiresInSeconds);
+
+    const issuedAt = new Date();
+    const contentType = input.contentType.trim();
+    const headers = {
+      'content-type': contentType,
+      'if-none-match': '*',
+      'x-amz-checksum-sha256': input.checksumValue,
+      'x-amz-meta-aiflow-checksum-sha256': input.checksumValue,
+      'x-amz-meta-aiflow-checksum-type': 'FULL_OBJECT',
+      ...requiredEncryptionHeaders(this.config),
+    };
+    const signedHeaders = new Set([
+      'content-length',
+      'content-type',
+      'if-none-match',
+      ...Object.keys(headers).filter((header) => header.startsWith('x-amz-')),
+    ]);
+    const url = await getSignedUrl(
+      this.client,
+      new PutObjectCommand({
+        Bucket: this.config.bucket,
+        ChecksumSHA256: input.checksumValue,
+        ContentLength: input.contentLength,
+        ContentType: contentType,
+        IfNoneMatch: '*',
+        Key: input.key,
+        Metadata: {
+          'aiflow-checksum-sha256': input.checksumValue,
+          'aiflow-checksum-type': 'FULL_OBJECT',
+        },
+        ...(this.config.kmsKeyId === undefined
+          ? {}
+          : { SSEKMSKeyId: this.config.kmsKeyId }),
+        ServerSideEncryption: this.config.encryptionMode,
+      }),
+      {
+        expiresIn: input.expiresInSeconds,
+        signableHeaders: signedHeaders,
+        signingDate: issuedAt,
+        unhoistableHeaders: new Set(
+          [...signedHeaders].filter((header) => header.startsWith('x-amz-')),
+        ),
+      },
+    );
+
+    return {
+      expiresAt: new Date(issuedAt.getTime() + input.expiresInSeconds * 1_000),
+      headers,
+      method: 'PUT',
+      url,
+    };
+  }
+
+  async createMultipartUpload(
+    input: CreateMultipartUploadInput,
+  ): Promise<{ readonly uploadReference: string }> {
+    assertLocation(input.key);
+    assertContentType(input.contentType);
+    const contentType = input.contentType.trim();
+    const response = await this.client.send(
+      new CreateMultipartUploadCommand({
+        Bucket: this.config.bucket,
+        ChecksumAlgorithm: 'SHA256',
+        ChecksumType: 'COMPOSITE',
+        ContentType: contentType,
+        Key: input.key,
+        Metadata: { 'aiflow-checksum-type': 'COMPOSITE' },
+        ...(this.config.kmsKeyId === undefined
+          ? {}
+          : { SSEKMSKeyId: this.config.kmsKeyId }),
+        ServerSideEncryption: this.config.encryptionMode,
+      }),
+    );
+    if (response.UploadId === undefined || response.UploadId.length === 0) {
+      throw new Error('STORAGE_MULTIPART_REFERENCE_MISSING');
+    }
+    return { uploadReference: response.UploadId };
+  }
+
+  async createMultipartPartCapability(
+    input: CreateMultipartPartCapabilityInput,
+  ): Promise<UploadCapability> {
+    assertLocation(input.key);
+    assertUploadReference(input.uploadReference);
+    assertPartChecksum(input.checksumValue);
+    assertContentLength(input.contentLength);
+    assertCapabilityLifetime(input.expiresInSeconds);
+    if (
+      !Number.isInteger(input.partNumber) ||
+      input.partNumber < 1 ||
+      input.partNumber > MAX_MULTIPART_PARTS
+    ) {
+      throw new Error('STORAGE_MULTIPART_PART_NUMBER_INVALID');
+    }
+
+    const issuedAt = new Date();
+    const headers = { 'x-amz-checksum-sha256': input.checksumValue };
+    const url = await getSignedUrl(
+      this.client,
+      new UploadPartCommand({
+        Bucket: this.config.bucket,
+        ChecksumSHA256: input.checksumValue,
+        ContentLength: input.contentLength,
+        Key: input.key,
+        PartNumber: input.partNumber,
+        UploadId: input.uploadReference,
+      }),
+      {
+        expiresIn: input.expiresInSeconds,
+        signableHeaders: new Set(['content-length', 'x-amz-checksum-sha256']),
+        signingDate: issuedAt,
+        unhoistableHeaders: new Set(['x-amz-checksum-sha256']),
+      },
+    );
+
+    return {
+      expiresAt: new Date(issuedAt.getTime() + input.expiresInSeconds * 1_000),
+      headers,
+      method: 'PUT',
+      url,
+    };
+  }
+
+  async completeMultipartUpload(
+    input: CompleteMultipartUploadInput,
+  ): Promise<CompleteMultipartUploadResult> {
+    assertLocation(input.key);
+    assertUploadReference(input.uploadReference);
+    assertContentLength(input.sizeBytes);
+    if (input.parts.length < 2 || input.parts.length > MAX_MULTIPART_PARTS) {
+      throw new Error('STORAGE_MULTIPART_PARTS_INVALID');
+    }
+    input.parts.forEach((part, index) => {
+      assertPartChecksum(part.checksumValue);
+      if (
+        part.partNumber !== index + 1 ||
+        part.etag.trim().length === 0 ||
+        part.etag.length > 1_024
+      ) {
+        throw new Error('STORAGE_MULTIPART_PARTS_INVALID');
+      }
+    });
+    const expectedChecksum = compositeChecksum(input.parts);
+    const response = await this.client.send(
+      new CompleteMultipartUploadCommand({
+        Bucket: this.config.bucket,
+        ChecksumType: 'COMPOSITE',
+        IfNoneMatch: '*',
+        Key: input.key,
+        MpuObjectSize: input.sizeBytes,
+        MultipartUpload: {
+          Parts: input.parts.map((part) => ({
+            ChecksumSHA256: part.checksumValue,
+            ETag: part.etag,
+            PartNumber: part.partNumber,
+          })),
+        },
+        UploadId: input.uploadReference,
+      }),
+    );
+    if (response.VersionId === undefined || response.VersionId.length === 0) {
+      throw new Error('STORAGE_VERSION_MISSING');
+    }
+    if (
+      response.ChecksumSHA256 !== undefined &&
+      response.ChecksumSHA256 !== expectedChecksum
+    ) {
+      throw new Error('STORAGE_INTEGRITY_MISMATCH');
+    }
+    return {
+      checksum: {
+        algorithm: 'SHA256',
+        type: 'COMPOSITE',
+        value: expectedChecksum,
+      },
+      versionId: response.VersionId,
+    };
+  }
+
+  async abortMultipartUpload(input: {
+    readonly key: string;
+    readonly uploadReference: string;
+  }): Promise<void> {
+    assertLocation(input.key);
+    assertUploadReference(input.uploadReference);
+    await this.client.send(
+      new AbortMultipartUploadCommand({
+        Bucket: this.config.bucket,
+        Key: input.key,
+        UploadId: input.uploadReference,
+      }),
+    );
   }
 
   async headExactVersion(input: {
@@ -253,7 +532,9 @@ export class S3ObjectStorage implements ObjectStoragePort {
     if (!(response.Body instanceof Readable)) {
       throw new Error('STORAGE_BODY_UNAVAILABLE');
     }
-    return verifyingStream(response.Body, input.expectedChecksum);
+    return input.expectedChecksum.type === 'FULL_OBJECT'
+      ? verifyingStream(response.Body, input.expectedChecksum)
+      : response.Body;
   }
 
   async deleteExactVersion(input: DeleteObjectInput): Promise<void> {
