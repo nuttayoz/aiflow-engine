@@ -128,14 +128,17 @@ describe('S3 object storage contract', () => {
 
   it('issues a short-lived checksum-bound single PUT capability', async () => {
     const body = Buffer.from('phase-two-browser-upload');
-    const key = buildStorageObjectKey('tenant-browser', randomUUID());
+    const storageObjectId = randomUUID();
+    const tenantId = 'tenant-browser';
+    const key = buildStorageObjectKey(tenantId, storageObjectId);
     const checksumValue = checksum(body);
     const capability = await storage.createSinglePutCapability({
       checksumValue,
       contentLength: body.length,
       contentType: 'application/pdf',
       expiresInSeconds: 60,
-      key,
+      storageObjectId,
+      tenantId,
     });
 
     expect(capability).toMatchObject({
@@ -190,10 +193,13 @@ describe('S3 object storage contract', () => {
     const firstPart = Buffer.alloc(5 * 1024 * 1024, 1);
     const secondPart = Buffer.from('final-part');
     const parts = [firstPart, secondPart];
-    const key = buildStorageObjectKey('tenant-multipart', randomUUID());
+    const storageObjectId = randomUUID();
+    const tenantId = 'tenant-multipart';
+    const key = buildStorageObjectKey(tenantId, storageObjectId);
     const { uploadReference } = await storage.createMultipartUpload({
       contentType: 'application/pdf',
-      key,
+      storageObjectId,
+      tenantId,
     });
     const receipts = [];
 
@@ -203,7 +209,8 @@ describe('S3 object storage contract', () => {
         checksumValue,
         contentLength: body.length,
         expiresInSeconds: 60,
-        key,
+        storageObjectId,
+        tenantId,
         partNumber: index + 1,
         uploadReference,
       });
@@ -224,9 +231,10 @@ describe('S3 object storage contract', () => {
     }
 
     const completed = await storage.completeMultipartUpload({
-      key,
       parts: receipts,
       sizeBytes: firstPart.length + secondPart.length,
+      storageObjectId,
+      tenantId,
       uploadReference,
     });
     expect(completed).toMatchObject({
@@ -256,19 +264,26 @@ describe('S3 object storage contract', () => {
   });
 
   it('aborts a multipart upload and rejects unsafe capability inputs', async () => {
-    const key = buildStorageObjectKey('tenant-abort', randomUUID());
+    const storageObjectId = randomUUID();
+    const tenantId = 'tenant-abort';
     const { uploadReference } = await storage.createMultipartUpload({
       contentType: 'application/pdf',
-      key,
+      storageObjectId,
+      tenantId,
     });
-    await storage.abortMultipartUpload({ key, uploadReference });
+    await storage.abortMultipartUpload({
+      storageObjectId,
+      tenantId,
+      uploadReference,
+    });
 
     const body = Buffer.from('aborted-part');
     const capability = await storage.createMultipartPartCapability({
       checksumValue: checksum(body),
       contentLength: body.length,
       expiresInSeconds: 60,
-      key,
+      storageObjectId,
+      tenantId,
       partNumber: 1,
       uploadReference,
     });
@@ -285,7 +300,8 @@ describe('S3 object storage contract', () => {
         contentLength: body.length,
         contentType: 'application/pdf',
         expiresInSeconds: 60,
-        key,
+        storageObjectId,
+        tenantId,
       }),
     ).rejects.toThrow('STORAGE_CHECKSUM_INVALID');
     await expect(
@@ -293,7 +309,8 @@ describe('S3 object storage contract', () => {
         checksumValue: checksum(body),
         contentLength: body.length,
         expiresInSeconds: 901,
-        key,
+        storageObjectId,
+        tenantId,
         partNumber: 1,
         uploadReference,
       }),

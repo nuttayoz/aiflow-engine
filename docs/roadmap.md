@@ -191,6 +191,9 @@ Implemented:
 - Provider-neutral direct-upload storage capabilities backed by checksum-bound,
   short-lived S3 single-PUT and multipart URLs, conditional completion, and
   explicit multipart abort.
+- Direct-upload application planning with server-owned size limits, automatic
+  single/multipart selection, durable multipart binding, and safe retry
+  reconciliation that never exposes the storage upload reference.
 
 Scope:
 

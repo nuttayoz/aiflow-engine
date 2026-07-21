@@ -16,7 +16,7 @@ import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 
 import type { S3RuntimeConfig } from '@aiflow/config';
 
-import { isStorageObjectKey } from './key-policy';
+import { buildStorageObjectKey, isStorageObjectKey } from './key-policy';
 import type {
   DeleteObjectInput,
   DirectUploadStoragePort,
@@ -242,7 +242,7 @@ export class S3ObjectStorage
   async createSinglePutCapability(
     input: CreateSinglePutCapabilityInput,
   ): Promise<UploadCapability> {
-    assertLocation(input.key);
+    const key = buildStorageObjectKey(input.tenantId, input.storageObjectId);
     assertChecksum({
       algorithm: 'SHA256',
       type: 'FULL_OBJECT',
@@ -276,7 +276,7 @@ export class S3ObjectStorage
         ContentLength: input.contentLength,
         ContentType: contentType,
         IfNoneMatch: '*',
-        Key: input.key,
+        Key: key,
         Metadata: {
           'aiflow-checksum-sha256': input.checksumValue,
           'aiflow-checksum-type': 'FULL_OBJECT',
@@ -307,7 +307,7 @@ export class S3ObjectStorage
   async createMultipartUpload(
     input: CreateMultipartUploadInput,
   ): Promise<{ readonly uploadReference: string }> {
-    assertLocation(input.key);
+    const key = buildStorageObjectKey(input.tenantId, input.storageObjectId);
     assertContentType(input.contentType);
     const contentType = input.contentType.trim();
     const response = await this.client.send(
@@ -316,7 +316,7 @@ export class S3ObjectStorage
         ChecksumAlgorithm: 'SHA256',
         ChecksumType: 'COMPOSITE',
         ContentType: contentType,
-        Key: input.key,
+        Key: key,
         Metadata: { 'aiflow-checksum-type': 'COMPOSITE' },
         ...(this.config.kmsKeyId === undefined
           ? {}
@@ -333,7 +333,7 @@ export class S3ObjectStorage
   async createMultipartPartCapability(
     input: CreateMultipartPartCapabilityInput,
   ): Promise<UploadCapability> {
-    assertLocation(input.key);
+    const key = buildStorageObjectKey(input.tenantId, input.storageObjectId);
     assertUploadReference(input.uploadReference);
     assertPartChecksum(input.checksumValue);
     assertContentLength(input.contentLength);
@@ -354,7 +354,7 @@ export class S3ObjectStorage
         Bucket: this.config.bucket,
         ChecksumSHA256: input.checksumValue,
         ContentLength: input.contentLength,
-        Key: input.key,
+        Key: key,
         PartNumber: input.partNumber,
         UploadId: input.uploadReference,
       }),
@@ -377,7 +377,7 @@ export class S3ObjectStorage
   async completeMultipartUpload(
     input: CompleteMultipartUploadInput,
   ): Promise<CompleteMultipartUploadResult> {
-    assertLocation(input.key);
+    const key = buildStorageObjectKey(input.tenantId, input.storageObjectId);
     assertUploadReference(input.uploadReference);
     assertContentLength(input.sizeBytes);
     if (input.parts.length < 2 || input.parts.length > MAX_MULTIPART_PARTS) {
@@ -399,7 +399,7 @@ export class S3ObjectStorage
         Bucket: this.config.bucket,
         ChecksumType: 'COMPOSITE',
         IfNoneMatch: '*',
-        Key: input.key,
+        Key: key,
         MpuObjectSize: input.sizeBytes,
         MultipartUpload: {
           Parts: input.parts.map((part) => ({
@@ -431,15 +431,16 @@ export class S3ObjectStorage
   }
 
   async abortMultipartUpload(input: {
-    readonly key: string;
+    readonly storageObjectId: string;
+    readonly tenantId: string;
     readonly uploadReference: string;
   }): Promise<void> {
-    assertLocation(input.key);
+    const key = buildStorageObjectKey(input.tenantId, input.storageObjectId);
     assertUploadReference(input.uploadReference);
     await this.client.send(
       new AbortMultipartUploadCommand({
         Bucket: this.config.bucket,
-        Key: input.key,
+        Key: key,
         UploadId: input.uploadReference,
       }),
     );

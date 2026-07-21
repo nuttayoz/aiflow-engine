@@ -33,24 +33,26 @@ export interface UploadCapability {
   readonly url: string;
 }
 
-export interface CreateSinglePutCapabilityInput {
+export interface DirectUploadObjectTarget {
+  readonly storageObjectId: string;
+  readonly tenantId: string;
+}
+
+export interface CreateSinglePutCapabilityInput extends DirectUploadObjectTarget {
   readonly checksumValue: string;
   readonly contentLength: number;
   readonly contentType: string;
   readonly expiresInSeconds: number;
-  readonly key: string;
 }
 
-export interface CreateMultipartUploadInput {
+export interface CreateMultipartUploadInput extends DirectUploadObjectTarget {
   readonly contentType: string;
-  readonly key: string;
 }
 
-export interface CreateMultipartPartCapabilityInput {
+export interface CreateMultipartPartCapabilityInput extends DirectUploadObjectTarget {
   readonly checksumValue: string;
   readonly contentLength: number;
   readonly expiresInSeconds: number;
-  readonly key: string;
   readonly partNumber: number;
   readonly uploadReference: string;
 }
@@ -61,8 +63,7 @@ export interface MultipartPartReceipt {
   readonly partNumber: number;
 }
 
-export interface CompleteMultipartUploadInput {
-  readonly key: string;
+export interface CompleteMultipartUploadInput extends DirectUploadObjectTarget {
   readonly parts: readonly MultipartPartReceipt[];
   readonly sizeBytes: number;
   readonly uploadReference: string;
@@ -75,7 +76,8 @@ export interface CompleteMultipartUploadResult {
 
 export interface DirectUploadStoragePort {
   abortMultipartUpload(input: {
-    readonly key: string;
+    readonly storageObjectId: string;
+    readonly tenantId: string;
     readonly uploadReference: string;
   }): Promise<void>;
   completeMultipartUpload(
