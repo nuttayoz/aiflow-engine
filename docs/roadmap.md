@@ -4,16 +4,16 @@ This roadmap controls implementation order. A phase starts only after its entry 
 
 ## Status overview
 
-| Stage    | Outcome                            | Status      |
-| -------- | ---------------------------------- | ----------- |
-| Phase 0A | Repository skeleton                | Complete    |
-| Phase 0B | Contract and platform discovery    | In progress |
-| Phase 1  | Reliable engine foundation         | In progress |
-| Phase 2  | Direct-upload proof and demo       | Not started |
-| Phase 3  | Existing DevPortal compatibility   | Not started |
-| Phase 4  | SharePoint entry and destination   | Not started |
-| Phase 5  | Templates and review               | Not started |
-| Phase 6  | Migration, cutover, and retirement | Not started |
+| Stage    | Outcome                            | Status        |
+| -------- | ---------------------------------- | ------------- |
+| Phase 0A | Repository skeleton                | Complete      |
+| Phase 0B | Contract and platform discovery    | Complete      |
+| Phase 1  | Reliable engine foundation         | Code complete |
+| Phase 2  | Direct-upload proof and demo       | Not started   |
+| Phase 3  | Existing DevPortal compatibility   | Not started   |
+| Phase 4  | SharePoint entry and destination   | Not started   |
+| Phase 5  | Templates and review               | Not started   |
+| Phase 6  | Migration, cutover, and retirement | Not started   |
 
 No Phase 2 or later product behavior is implemented.
 
@@ -40,7 +40,7 @@ Explicitly not delivered:
 
 ## Phase 0B: contract and platform discovery
 
-Status: in progress.
+Status: complete.
 
 Purpose: remove implementation ambiguity before building the reliability foundation.
 
@@ -101,7 +101,7 @@ Exit criteria:
 
 ## Phase 1: reliable engine foundation
 
-Status: in progress.
+Status: code complete; platform validation pending.
 
 Purpose: prove that execution state and commands cannot be lost before adding real document processing.
 
@@ -114,6 +114,27 @@ Implemented in this foundation slice:
 - PostgreSQL 18.4 local/test environment with separate bootstrap, migration, and runtime identities.
 - Bounded TypeORM runtime pools, migration-only schema ownership, transactional migration command, lifecycle shutdown, and database-aware readiness.
 - Exact-version integration coverage proving runtime DML access and denial of runtime DDL.
+- Reviewed Phase 1 schema for workflows, versions, frozen profiles, provisioning,
+  storage objects, documents, executions, stages, attempts, idempotency, inbox,
+  outbox, audit, and scheduler leases.
+- Tenant-scoped PostgreSQL repositories, guarded execution transitions,
+  activation idempotency, atomic active-version switching, and transactional
+  outbox writes.
+- RabbitMQ 4.3.2 durable topic topology, quorum queues, confirmed mandatory
+  publication, manual acknowledgement, bounded redelivery, inspectable DLQs, and
+  validated confirmed replay.
+- Outbox publisher, worker inbox deduplication, execution leases, expired-lease
+  recovery, retry scheduling, and scheduler leadership using database time.
+- AWS S3 adapter with immutable conditional writes, streaming reads/writes,
+  full-object SHA-256 validation, exact-version operations, and deletion tests
+  against pinned Moto 5.2.2.
+- Connector SDK, configuration schema validation, capability hashing, shared
+  connector checks, direct-upload entry descriptor, and non-production synthetic
+  destination.
+- Prometheus metrics for every runtime role, OpenTelemetry spans, optional
+  redacted Sentry reporting, and append-only audit facts.
+- A runnable smoke command proving activation and synthetic
+  EXTRACT -> MAP -> DELIVER across separate scheduler and worker processes.
 
 Implementation order:
 
@@ -139,6 +160,19 @@ Exit criteria:
 - Scheduler failover does not run the same reconciliation job concurrently.
 - S3 contract tests prove streaming, checksum validation, immutable keys, and deletion behavior.
 - Tenant isolation tests cover every repository and public API query.
+
+Verification:
+
+- `bun run check` passes all static gates and unit tests.
+- `bun run test:integration` proves PostgreSQL 18.4, RabbitMQ 4.3.2, and S3
+  adapter contracts in pinned containers.
+- `bun run phase1:smoke` proves real local PostgreSQL, RabbitMQ, and object-storage
+  flow with separate worker and scheduler runtimes.
+- Phase 1 exposes only health queries publicly; canonical workflow/upload APIs
+  remain a Phase 2 deliverable and therefore add no untrusted tenant query yet.
+- Final production approval still requires the platform-owned disposable AWS S3
+  contract run and confirmation of managed PostgreSQL/RabbitMQ controls listed in
+  Phase 0B; these are deployment validations, not missing engine code.
 
 ## Phase 2: direct-upload proof with internal demo harness
 

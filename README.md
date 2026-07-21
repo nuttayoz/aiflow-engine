@@ -1,6 +1,9 @@
 # AiFlow Engine
 
-AiFlow Engine is the single replacement repository for the n8n-based AiFlow runtime services. The repository currently contains the compilable project skeleton and the first Phase 1 runtime foundation.
+AiFlow Engine is the single replacement repository for the n8n-based AiFlow
+runtime services. Phase 1 now provides the reliable, runnable engine foundation;
+real OCR, Dynamics, SharePoint, review, and DevPortal product behavior begins in
+later roadmap phases.
 
 The existing DevPortal frontend is not part of this repository and will not be rebuilt. Its AiFlow screens will call this engine's canonical APIs directly. `devportal-backend` remains responsible for its existing non-AiFlow features and temporary legacy traffic, but it is not part of the new AiFlow runtime path.
 
@@ -14,9 +17,10 @@ aiflow-engine worker --queues=extract,map
 aiflow-engine scheduler
 ```
 
-- `api`: HTTP entry point. The skeleton exposes only liveness and readiness endpoints.
-- `worker`: long-running application context. No consumers are registered yet.
-- `scheduler`: long-running application context. No jobs are registered yet.
+- `api`: HTTP entry point. Phase 1 exposes liveness and database readiness.
+- `worker`: consumes independently selectable provisioning and stage queues.
+- `scheduler`: publishes the transactional outbox and recovers expired leases and
+  due retries under database leadership.
 
 ## Local setup
 
@@ -24,20 +28,44 @@ Requirements:
 
 - Bun 1.3.14
 - Node.js 24.18.0 LTS
-- Docker with Compose for PostgreSQL and integration tests
+- Docker with Compose for local PostgreSQL, RabbitMQ, Moto S3, and integration tests
 
 ```bash
 bun install --frozen-lockfile
-bun run db:up
-bun run db:migrate
+cp .env.example .env
+bun run phase1:prepare
 bun run check
-bun run build
-bun run start:api
+bun run test:integration
 ```
+
+Start each independently scalable role in its own terminal:
+
+```bash
+bun run start:api
+bun run start:worker
+bun run start:scheduler
+```
+
+Then prove the durable Phase 1 flow from a fourth terminal:
+
+```bash
+bun run phase1:smoke
+```
+
+The smoke command creates and activates a provider-neutral test workflow, streams
+a small source object into local S3, stages a document, commits the execution and
+outbox command, and waits for RabbitMQ workers to complete synthetic EXTRACT, MAP,
+and DELIVER stages. Synthetic stages are disabled in production.
 
 Runtime configuration comes only from validated environment variables. Copy `.env.example` to `.env` only for local values and never commit `.env` or real credentials. Bun loads the local file for repository scripts. JSON logs include service, runtime role, environment, event, and request correlation fields while omitting request bodies, query strings, authorization headers, and known secret fields.
 
-PostgreSQL uses separate runtime and migration URLs. API, worker, and scheduler never load migration credentials. See the [PostgreSQL runbook](docs/operations/postgresql.md) for local identities, reset, rollout, and recovery behavior.
+PostgreSQL uses separate runtime and migration URLs. API, worker, and scheduler
+never load migration credentials. The migration command also holds a database
+advisory lock. See the [PostgreSQL runbook](docs/operations/postgresql.md) for
+local identities, reset, rollout, and recovery behavior.
+
+For dead-letter inspection and bounded confirmed replay, see the
+[RabbitMQ runbook](docs/operations/rabbitmq.md).
 
 Health endpoints:
 
@@ -45,6 +73,11 @@ Health endpoints:
 GET /health/live
 GET /health/ready
 ```
+
+Prometheus metrics are exposed on a separate internal listener at `/metrics`.
+Local defaults are ports `9464` (API), `9465` (worker), and `9466`
+(scheduler). OpenTelemetry uses the standard API so the platform tracer can
+install its provider, and Sentry is enabled only when `SENTRY_DSN` is supplied.
 
 Readiness returns `503 DATABASE_UNAVAILABLE` until the runtime identity can execute a bounded PostgreSQL probe. Run the exact-version integration suite separately with `bun run test:integration`.
 
@@ -105,7 +138,10 @@ docs/
   roadmap.md
 ```
 
-Infrastructure and domain packages are deliberately empty boundaries. PostgreSQL, RabbitMQ, S3, connector behavior, workflow state transitions, and DevPortal compatibility endpoints will be implemented phase by phase.
+Provider-specific connector packages remain deliberately deferred, but the Phase
+1 package boundaries now contain provider-neutral workflow validation,
+provisioning, execution state transitions, PostgreSQL repositories, RabbitMQ
+transport, S3 storage, connector contracts, and observability adapters.
 
 Implementation sequencing is defined in [`docs/roadmap.md`](docs/roadmap.md). Phase 0B contracts currently include the [`canonical API v1`](docs/contracts/canonical-api-v1.md), [`workflow provisioning v1`](docs/contracts/workflow-provisioning-v1.md), [`execution lifecycle`](docs/contracts/execution-lifecycle.md), [`RabbitMQ messaging v1`](docs/contracts/messaging-v1.md), [`PostgreSQL persistence v1`](docs/contracts/postgresql-v1.md), [`object storage v1`](docs/contracts/storage-v1.md), [`external OCR v1`](docs/contracts/ocr-v1.md), [`custom extraction templates v1`](docs/contracts/extraction-templates-v1.md), [`Microsoft Dynamics destination v1`](docs/contracts/dynamics-destination-v1.md), [`Microsoft SharePoint entry v1`](docs/contracts/sharepoint-entry-v1.md), [`human review v1`](docs/contracts/review-v1.md), [`DevPortal compatibility discovery`](docs/contracts/devportal-compatibility.md), and [`platform baseline`](docs/contracts/platform-baseline.md).
 

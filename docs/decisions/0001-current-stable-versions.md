@@ -44,7 +44,7 @@ AiFlow Engine uses the latest stable, production-supported, mutually compatible 
 - Patch/minor upgrades require the full quality and integration suite. Major upgrades require an explicit compatibility/migration review; use a new ADR when architecture or persisted contracts change.
 - A platform limitation may require an older supported version, but the exception must name its owner, reason, support deadline, and upgrade plan.
 
-Verified baseline on 2026-07-17:
+Verified baseline on 2026-07-20:
 
 | Tool              | Selected version | Reason                                                                              |
 | ----------------- | ---------------- | ----------------------------------------------------------------------------------- |
@@ -58,6 +58,13 @@ Verified baseline on 2026-07-17:
 | TypeORM           | 1.1.0            | Latest stable ORM/migration release compatible with Node 24 and PostgreSQL.         |
 | `pg`              | 8.22.0           | Latest stable PostgreSQL driver and a supported TypeORM peer.                       |
 | Testcontainers    | 12.0.4           | Latest stable Node test container library for PostgreSQL contract tests.            |
+| Moto              | 5.2.2            | Current pinned local/test S3 emulator; never used as production object storage.     |
+| AWS SDK S3        | 3.1090.0         | Current stable modular S3 client used by the production storage adapter.            |
+| `amqplib`         | 2.0.1            | Current stable RabbitMQ client with connection recovery and bundled types.          |
+| Ajv               | 8.20.0           | Current stable JSON Schema validator; `ajv-formats` is pinned to 3.0.1.             |
+| OpenTelemetry API | 1.9.1            | Stable vendor-neutral tracing API for the platform-installed provider.              |
+| Sentry Node       | 10.66.0          | Current stable optional adapter for the existing platform Sentry project.           |
+| `prom-client`     | 15.1.3           | Current stable Prometheus client for role-local internal metrics endpoints.         |
 | TypeScript        | 6.0.3            | Latest release supported by current `typescript-eslint` and `ts-jest` peer ranges.  |
 | Jest              | 30.4.2           | Latest stable Jest release, supported by the current `ts-jest`.                     |
 | ESLint            | 10.7.0           | Latest stable ESLint release.                                                       |
@@ -65,7 +72,9 @@ Verified baseline on 2026-07-17:
 
 TypeScript 7.0.2 is newer but is not selected because the current stable `typescript-eslint` and `ts-jest` versions do not support it. Re-evaluate it when the full toolchain supports it.
 
-Planned Phase 1 libraries such as `amqplib`, AWS SDK v3, Ajv, and JOSE remain uninstalled. Their exact versions will be verified and pinned when their Phase 1 slice begins.
+Phase 1 runtime libraries are installed at the exact versions above. JOSE remains
+deferred until the canonical authenticated API slice has the platform token
+contract needed to select and configure it.
 
 ## Consequences
 
