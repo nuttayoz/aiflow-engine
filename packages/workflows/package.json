@@ -6,5 +6,11 @@
   "types": "dist/index.d.ts",
   "files": [
     "dist"
-  ]
+  ],
+  "dependencies": {
+    "@aiflow/connector-sdk": "workspace:*",
+    "@aiflow/core": "workspace:*",
+    "@aiflow/extraction": "workspace:*",
+    "ajv": "8.20.0"
+  }
 }
