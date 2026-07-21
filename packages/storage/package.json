@@ -9,6 +9,7 @@
   ],
   "dependencies": {
     "@aiflow/config": "workspace:*",
+    "@aiflow/core": "workspace:*",
     "@aws-sdk/client-s3": "3.1090.0"
   }
 }

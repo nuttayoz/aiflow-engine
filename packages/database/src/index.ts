@@ -9,5 +9,6 @@ export * from './migrations';
 export * from './outbox.repository';
 export * from './scheduler.repository';
 export * from './storage-object.repository';
+export * from './upload-session.repository';
 export * from './workflow.repository';
 export * from './workflow-provisioning.repository';

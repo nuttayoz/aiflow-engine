@@ -42,7 +42,7 @@ The package named below owns the business meaning and repository contract. Physi
 | `workflows`   | `workflows`, `workflow_versions`, `workflow_version_connection_refs`, `workflow_version_profile_refs`, `workflow_activation_operations` | Stable workflow identity, immutable definitions, durable activation, connection references, and frozen extraction-profile references |
 | `connections` | `connections`                                                                                                                           | Tenant-owned safe provider configuration and external secret reference                                                               |
 | `templates`   | `extraction_templates`, `extraction_template_versions`                                                                                  | Tenant-owned custom extraction-profile authoring and immutable versions                                                              |
-| `storage`     | `storage_objects`                                                                                                                       | Provider-neutral object location, exact version, checksum, status, retention, and deletion intent                                    |
+| `storage`     | `storage_objects`, `upload_sessions`                                                                                                    | Provider-neutral object location/lifecycle plus durable direct-upload reservation and completion identity                            |
 | `documents`   | `documents`                                                                                                                             | Immutable source identity and accepted source-storage reference                                                                      |
 | `executions`  | `executions`, `execution_stages`, `stage_attempts`, `delivery_operations`                                                               | Provider-neutral lifecycle, attempts, waits, outputs, destination effects, and receipts                                              |
 | `extraction`  | `extraction_requests`, `extraction_callback_events`                                                                                     | External extraction operation, reconciliation, callback deduplication, and provider cleanup                                          |
@@ -68,6 +68,7 @@ workflows
   -> workflow_activation_operations -> target workflow_version
 
 documents
+  -> upload_sessions -> workflow_version + storage_objects
   -> storage_objects (source bytes)
   -> executions
        -> execution_stages
@@ -189,10 +190,26 @@ Rules:
 
 `storage_objects` stores the physical location alias, immutable object key and exact version, verified size/content type/checksum/encryption projection, lifecycle status, retention time, and deletion intent. It is owned by the storage module and defined by [`storage-v1.md`](storage-v1.md).
 
+`upload_sessions` stores one direct-upload reservation: tenant/project/workflow,
+the pinned active workflow version, source storage-object reference, selected
+single/multipart plan, expected file metadata and full-content checksum, guarded
+status, expiry, confidential multipart reference, and eventual immutable
+document/execution identity.
+
 `documents` stores accepted document identity and metadata: tenant/project, source connector and source identity, source `storage_object_id`, S3-verified checksum/size snapshot, optional full-content SHA-256 plus verification state, original safe filename, and staging time.
 
 Rules:
 
+- Session creation idempotently commits the active workflow-version pin,
+  `RESERVED` storage object, upload-session row, and audit fact in one
+  transaction.
+- Session state is limited to `ACTIVE`, `COMPLETED`, `ABORTED`, and `EXPIRED`;
+  there is no unverified `UPLOADED` database state.
+- `(tenant_id, storage_object_id)`, completed `(tenant_id, document_id)`, and
+  completed `(tenant_id, execution_id)` are unique.
+- Abort/expiry and storage abandonment commit atomically. Completion later
+  commits storage availability, document, execution, outbox, idempotency, and
+  audit state atomically after exact-object verification.
 - The row is created only after object existence, size, and checksum are verified.
 - Source storage-object identity, checksum, and staged metadata are immutable after acceptance.
 - Direct-upload idempotency and provider source identity prevent duplicate document creation.

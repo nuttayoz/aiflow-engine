@@ -8,5 +8,5 @@
   },
   "include": ["src/**/*.ts"],
   "exclude": ["src/**/*.spec.ts", "src/**/*.integration-spec.ts"],
-  "references": [{ "path": "../config" }]
+  "references": [{ "path": "../config" }, { "path": "../core" }]
 }

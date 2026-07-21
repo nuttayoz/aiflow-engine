@@ -32,8 +32,8 @@ import { PostgresStorageObjectRepository } from './storage-object.repository';
 import { PostgresWorkflowProvisioningRepository } from './workflow-provisioning.repository';
 import { PostgresWorkflowRepository } from './workflow.repository';
 
-class DatabaseContractProbe1784505600001 implements MigrationInterface {
-  readonly name = 'DatabaseContractProbe1784505600001';
+class DatabaseContractProbe1784592000001 implements MigrationInterface {
+  readonly name = 'DatabaseContractProbe1784592000001';
 
   async down(queryRunner: QueryRunner): Promise<void> {
     await queryRunner.query('DROP TABLE aiflow.database_contract_probe');
@@ -128,7 +128,7 @@ describe('PostgreSQL foundation', () => {
     });
     await runDatabaseMigrations(migrationConfig, [
       ...ENGINE_MIGRATIONS,
-      DatabaseContractProbe1784505600001,
+      DatabaseContractProbe1784592000001,
     ]);
     runtimeDataSource = createApplicationDataSource(runtimeConfig, 'worker');
     await runtimeDataSource.initialize();
@@ -160,7 +160,7 @@ describe('PostgreSQL foundation', () => {
 
     const migrationDataSource = createMigrationDataSource(migrationConfig, [
       ...ENGINE_MIGRATIONS,
-      DatabaseContractProbe1784505600001,
+      DatabaseContractProbe1784592000001,
     ]);
     try {
       await migrationDataSource.initialize();
@@ -170,7 +170,7 @@ describe('PostgreSQL foundation', () => {
       await expect(
         runDatabaseMigrations(migrationConfig, [
           ...ENGINE_MIGRATIONS,
-          DatabaseContractProbe1784505600001,
+          DatabaseContractProbe1784592000001,
         ]),
       ).resolves.toHaveLength(1);
     } finally {

@@ -9,7 +9,7 @@ This roadmap controls implementation order. A phase starts only after its entry 
 | Phase 0A | Repository skeleton                | Complete      |
 | Phase 0B | Contract and platform discovery    | Complete      |
 | Phase 1  | Reliable engine foundation         | Code complete |
-| Phase 2  | Direct-upload proof and demo       | Not started   |
+| Phase 2  | Direct-upload proof and demo       | In progress   |
 | Phase 3  | Existing DevPortal compatibility   | Not started   |
 | Phase 4  | SharePoint entry and destination   | Not started   |
 | Phase 5  | Templates and review               | Not started   |
@@ -176,7 +176,17 @@ Verification:
 
 ## Phase 2: direct-upload proof with internal demo harness
 
+Status: in progress.
+
 Purpose: deliver and demonstrate one complete workflow without n8n, review, or changes to the real DevPortal.
+
+Implemented:
+
+- Provider-neutral upload-session lifecycle with explicit active/completed/
+  aborted/expired states, guarded transitions, and idempotent terminal replay.
+- Additive PostgreSQL upload-session schema plus tenant-scoped, idempotent
+  reservation, multipart binding, abort, expiry, audit, and storage-abandonment
+  persistence.
 
 Scope:
 
