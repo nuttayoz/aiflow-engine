@@ -515,10 +515,13 @@ export class PostgresUploadSessionRepository implements UploadSessionRepository 
             content_type,
             checksum_algorithm,
             checksum_value,
+            content_sha256,
+            content_sha256_verified_at,
             original_filename,
             staged_at
           ) VALUES (
-            $1, $2, $3, 'direct-upload', $4, $5, $6, $7, $8, $9, $10, $11, $12
+            $1, $2, $3, 'direct-upload', $4, $5, $6, $7, $8, $9, $10,
+            $11, $12, $13, $14
           )
         `,
         [
@@ -532,6 +535,10 @@ export class PostgresUploadSessionRepository implements UploadSessionRepository 
           input.metadata.contentType,
           input.metadata.checksum.algorithm,
           input.metadata.checksum.value,
+          Buffer.from(current.session.clientChecksum.value, 'base64').toString(
+            'hex',
+          ),
+          input.metadata.checksum.type === 'FULL_OBJECT' ? current.now : null,
           current.session.originalFilename,
           current.now,
         ],
@@ -781,6 +788,25 @@ export class PostgresUploadSessionRepository implements UploadSessionRepository 
     input: UploadSessionMutationInput,
   ): Promise<UploadSessionRecord> {
     return this.close(input, 'EXPIRED');
+  }
+
+  async listExpiredActive(
+    limit = 100,
+  ): Promise<readonly UploadSessionRecord[]> {
+    if (!Number.isInteger(limit) || limit < 1 || limit > 500) {
+      throw new Error('UPLOAD_SESSION_LIST_LIMIT_INVALID');
+    }
+    const rows = (await this.dataSource.query(
+      `
+        SELECT ${columns}
+        FROM ${this.sessions}
+        WHERE status = 'ACTIVE' AND expires_at <= clock_timestamp()
+        ORDER BY expires_at, id
+        LIMIT $1
+      `,
+      [limit],
+    )) as UploadSessionRow[];
+    return rows.map(mapSession);
   }
 
   private async acquireCompletionIdempotency(

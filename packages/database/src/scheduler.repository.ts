@@ -125,6 +125,7 @@ export class PostgresExecutionRecoveryRepository implements ExecutionRecoveryRep
   private readonly auditEvents: string;
   private readonly attempts: string;
   private readonly executions: string;
+  private readonly deliveryOperations: string;
   private readonly stages: string;
   private readonly versions: string;
   private readonly outbox: PostgresOutboxRepository;
@@ -136,6 +137,7 @@ export class PostgresExecutionRecoveryRepository implements ExecutionRecoveryRep
     this.auditEvents = table(schema, 'audit_events');
     this.attempts = table(schema, 'stage_attempts');
     this.executions = table(schema, 'executions');
+    this.deliveryOperations = table(schema, 'delivery_operations');
     this.stages = table(schema, 'execution_stages');
     this.versions = table(schema, 'workflow_versions');
     this.outbox = new PostgresOutboxRepository(dataSource, schema);
@@ -188,6 +190,20 @@ export class PostgresExecutionRecoveryRepository implements ExecutionRecoveryRep
         );
 
         if (row.stage === 'DELIVER') {
+          await manager.query(
+            `
+              UPDATE ${this.deliveryOperations}
+              SET status = 'UNKNOWN',
+                  state_version = state_version + 1,
+                  next_check_at = clock_timestamp(),
+                  failure_code = 'DESTINATION_OUTCOME_UNKNOWN',
+                  updated_at = clock_timestamp()
+              WHERE tenant_id = $1
+                AND current_execution_id = $2
+                AND status = 'SUBMITTING'
+            `,
+            [row.tenant_id, row.execution_id],
+          );
           await manager.query(
             `
               UPDATE ${this.stages}

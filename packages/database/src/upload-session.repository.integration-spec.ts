@@ -20,6 +20,9 @@ import type { ValidatedWorkflowDefinition } from '@aiflow/workflows';
 
 import { createApplicationDataSource } from './data-source';
 import { runDatabaseMigrations } from './migration-runner';
+import { PostgresExecutionRepository } from './execution.repository';
+import { PostgresPipelineRepository } from './pipeline.repository';
+import { PostgresExecutionRecoveryRepository } from './scheduler.repository';
 import { PostgresUploadSessionRepository } from './upload-session.repository';
 import { PostgresWorkflowProvisioningRepository } from './workflow-provisioning.repository';
 import { PostgresWorkflowRepository } from './workflow.repository';
@@ -55,6 +58,35 @@ const validatedDefinition: ValidatedWorkflowDefinition = {
     profileId: 'synthetic-profile',
     profileKind: 'SYSTEM',
     profileVersionId: 'synthetic-profile-v1',
+  },
+};
+
+const phase2Definition: ValidatedWorkflowDefinition = {
+  connectionReferences: [],
+  definition: {
+    destination: {
+      actionId: 'create-purchase-invoice-draft',
+      config: { companyId: 'fake-company-1' },
+      connectorId: 'microsoft-business-central',
+    },
+    entry: { config: {}, connectorId: 'direct-upload' },
+    extraction: { config: {}, profileId: 'invoice-basic' },
+    mappings: [
+      {
+        required: true,
+        sourceField: 'invoice_number',
+        targetField: 'vendorInvoiceNumber',
+      },
+    ],
+    reviewPolicy: { required: false },
+    schemaVersion: 1,
+  },
+  definitionHash: 'c'.repeat(64),
+  profileReference: {
+    outputSchemaHash: 'd'.repeat(64),
+    profileId: 'invoice-basic',
+    profileKind: 'SYSTEM',
+    profileVersionId: 'invoice-basic-v1',
   },
 };
 
@@ -110,6 +142,7 @@ describe('PostgreSQL upload sessions', () => {
   const activateWorkflow = async (
     tenantId: string,
     projectId: string,
+    definition: ValidatedWorkflowDefinition = validatedDefinition,
   ): Promise<{ readonly versionId: string; readonly workflowId: string }> => {
     const workflows = new PostgresWorkflowRepository(
       runtimeDataSource,
@@ -125,7 +158,7 @@ describe('PostgreSQL upload sessions', () => {
       actor: { id: 'upload-test-user', type: 'USER' },
       causationId: randomUUID(),
       correlationId: randomUUID(),
-      definition: validatedDefinition,
+      definition,
       name: 'Upload test workflow',
       projectId,
       tenantId,
@@ -588,5 +621,287 @@ describe('PostgreSQL upload sessions', () => {
       session_status: 'ACTIVE',
       storage_status: 'RESERVED',
     });
+  });
+
+  it('commits extraction, mapping, and one effective-once delivery lifecycle', async () => {
+    const tenantId = 'upload-tenant-pipeline';
+    const projectId = 'upload-project-pipeline';
+    const { workflowId } = await activateWorkflow(
+      tenantId,
+      projectId,
+      phase2Definition,
+    );
+    const uploads = new PostgresUploadSessionRepository(
+      runtimeDataSource,
+      runtimeConfig.schema,
+    );
+    const executions = new PostgresExecutionRepository(
+      runtimeDataSource,
+      runtimeConfig.schema,
+    );
+    const pipeline = new PostgresPipelineRepository(
+      runtimeDataSource,
+      runtimeConfig.schema,
+    );
+    const upload = createInput(tenantId, projectId, workflowId);
+    const session = await uploads.create(upload);
+    const documentId = randomUUID();
+    const executionId = randomUUID();
+    await uploads.commitCompletion({
+      actor: upload.actor,
+      causationId: randomUUID(),
+      correlationId: randomUUID(),
+      documentId,
+      executionId,
+      idempotencyKey: randomUUID(),
+      metadata: {
+        checksum: {
+          algorithm: 'SHA256',
+          type: 'FULL_OBJECT',
+          value: upload.clientChecksumValue,
+        },
+        contentType: upload.contentType,
+        encryptionMode: 'AES256',
+        key: buildStorageObjectKey(tenantId, upload.storageObjectId),
+        sizeBytes: upload.sizeBytes,
+        versionId: 'source-version-pipeline',
+      },
+      tenantId,
+      uploadSessionId: session.id,
+    });
+
+    const extractLeaseOwner = 'pipeline-extract-worker';
+    const extractClaim = await executions.claimStage({
+      consumerName: 'pipeline-extract-consumer',
+      expectedStateVersion: 0,
+      executionId,
+      leaseDurationMs: 30_000,
+      leaseOwner: extractLeaseOwner,
+      messageId: randomUUID(),
+      messageType: 'aiflow.execution.stage.extract.requested.v1',
+      projectId,
+      stage: 'EXTRACT',
+      tenantId,
+    });
+    if (extractClaim === undefined) {
+      throw new Error('TEST_EXTRACT_NOT_CLAIMED');
+    }
+    const context = await pipeline.loadWorkContext(tenantId, executionId);
+    expect(context).toMatchObject({
+      contentSha256: Buffer.from(upload.clientChecksumValue, 'base64').toString(
+        'hex',
+      ),
+      source: { versionId: 'source-version-pipeline' },
+    });
+    const extractionRequestId = randomUUID();
+    const extractionStorageObjectId = randomUUID();
+    const callbackCorrelationId = randomUUID();
+    const extraction = await pipeline.prepareExtraction({
+      adapterId: 'fake-extraction',
+      callbackCorrelationId,
+      deadlineAt: new Date(Date.now() + 30 * 60 * 1_000),
+      executionId,
+      extractionRequestId,
+      leaseOwner: extractLeaseOwner,
+      nextCheckAt: new Date(),
+      profileId: 'invoice-basic',
+      profileVersionId: 'invoice-basic-v1',
+      projectId,
+      resultStorageObjectId: extractionStorageObjectId,
+      retentionUntil: new Date(Date.now() + 30 * 24 * 60 * 60 * 1_000),
+      stageAttemptId: extractClaim.attempt.attemptId,
+      tenantId,
+    });
+    await pipeline.recordExtractionAccepted({
+      nextCheckAt: new Date(),
+      providerOperationRef: 'fake-operation-1',
+      requestId: extraction.request.id,
+      tenantId,
+    });
+    await expect(
+      pipeline.acceptExtractionCallback({
+        adapterId: 'fake-extraction',
+        bodySha256: 'a'.repeat(64),
+        callbackCorrelationId,
+        providerEventId: 'fake-event-1',
+        safeStatus: 'COMPLETED',
+      }),
+    ).resolves.toBe('ACCEPTED');
+    await expect(
+      pipeline.acceptExtractionCallback({
+        adapterId: 'fake-extraction',
+        bodySha256: 'a'.repeat(64),
+        callbackCorrelationId,
+        providerEventId: 'fake-event-1',
+        safeStatus: 'COMPLETED',
+      }),
+    ).resolves.toBe('DUPLICATE');
+    await expect(
+      pipeline.acceptExtractionCallback({
+        adapterId: 'fake-extraction',
+        bodySha256: 'b'.repeat(64),
+        callbackCorrelationId,
+        providerEventId: 'fake-event-1',
+        safeStatus: 'COMPLETED',
+      }),
+    ).rejects.toThrow('EXTRACTION_CALLBACK_EVENT_CONFLICT');
+    const extractionChecksum = Buffer.alloc(32, 11).toString('base64');
+    await pipeline.completeExtraction({
+      causationId: randomUUID(),
+      executionId,
+      expectedStateVersion: extractClaim.execution.stateVersion,
+      leaseOwner: extractLeaseOwner,
+      metadata: {
+        checksum: {
+          algorithm: 'SHA256',
+          type: 'FULL_OBJECT',
+          value: extractionChecksum,
+        },
+        contentType: 'application/json',
+        encryptionMode: 'AES256',
+        key: buildStorageObjectKey(tenantId, extractionStorageObjectId),
+        sizeBytes: 512,
+        versionId: 'extraction-version-1',
+      },
+      requestId: extractionRequestId,
+      tenantId,
+    });
+
+    const afterExtraction = await executions.findById(tenantId, executionId);
+    expect(afterExtraction).toMatchObject({
+      currentStage: 'MAP',
+      stateVersion: 2,
+      status: 'MAPPING',
+    });
+    const mapLeaseOwner = 'pipeline-map-worker';
+    const mapClaim = await executions.claimStage({
+      consumerName: 'pipeline-map-consumer',
+      expectedStateVersion: 2,
+      executionId,
+      leaseDurationMs: 30_000,
+      leaseOwner: mapLeaseOwner,
+      messageId: randomUUID(),
+      messageType: 'aiflow.execution.stage.map.requested.v1',
+      projectId,
+      stage: 'MAP',
+      tenantId,
+    });
+    if (mapClaim === undefined) {
+      throw new Error('TEST_MAP_NOT_CLAIMED');
+    }
+    const mappingStorageObjectId = randomUUID();
+    await pipeline.prepareMappingArtifact({
+      executionId,
+      leaseOwner: mapLeaseOwner,
+      projectId,
+      retentionUntil: new Date(Date.now() + 30 * 24 * 60 * 60 * 1_000),
+      stageAttemptId: mapClaim.attempt.attemptId,
+      storageObjectId: mappingStorageObjectId,
+      tenantId,
+    });
+    const payloadSha256 = 'e'.repeat(64);
+    await pipeline.completeMapping({
+      actionId: 'create-purchase-invoice-draft',
+      actionVersion: 1,
+      causationId: randomUUID(),
+      companyResourceId: 'fake-company-1',
+      connectorId: 'microsoft-business-central',
+      deliveryOperationId: randomUUID(),
+      effectKey: randomUUID(),
+      executionId,
+      expectedStateVersion: mapClaim.execution.stateVersion,
+      leaseOwner: mapLeaseOwner,
+      metadata: {
+        checksum: {
+          algorithm: 'SHA256',
+          type: 'FULL_OBJECT',
+          value: Buffer.alloc(32, 12).toString('base64'),
+        },
+        contentType: 'application/json',
+        encryptionMode: 'AES256',
+        key: buildStorageObjectKey(tenantId, mappingStorageObjectId),
+        sizeBytes: 256,
+        versionId: 'mapping-version-1',
+      },
+      payloadSha256,
+      reconciliationDeadlineAt: new Date(Date.now() + 15 * 60 * 1_000),
+      tenantId,
+    });
+    const delivery = await pipeline.findDelivery(tenantId, executionId);
+    expect(delivery).toMatchObject({
+      companyResourceId: 'fake-company-1',
+      payloadSha256,
+      status: 'READY',
+    });
+    if (delivery === undefined) {
+      throw new Error('TEST_DELIVERY_NOT_FOUND');
+    }
+
+    const deliverLeaseOwner = 'pipeline-deliver-worker';
+    const deliverClaim = await executions.claimStage({
+      consumerName: 'pipeline-deliver-consumer',
+      expectedStateVersion: 4,
+      executionId,
+      leaseDurationMs: 30_000,
+      leaseOwner: deliverLeaseOwner,
+      messageId: randomUUID(),
+      messageType:
+        'aiflow.execution.stage.deliver.connector.microsoft-business-central.requested.v1',
+      projectId,
+      stage: 'DELIVER',
+      tenantId,
+    });
+    if (deliverClaim === undefined) {
+      throw new Error('TEST_DELIVERY_NOT_CLAIMED');
+    }
+    const submitting = await pipeline.startDelivery({
+      executionId,
+      expectedOperationStateVersion: delivery.stateVersion,
+      leaseOwner: deliverLeaseOwner,
+      operationId: delivery.id,
+      tenantId,
+    });
+    expect(submitting.status).toBe('SUBMITTING');
+    await runtimeDataSource.query(
+      `
+        UPDATE aiflow.execution_stages
+        SET lease_expires_at = clock_timestamp() - interval '1 second'
+        WHERE tenant_id = $1 AND execution_id = $2 AND stage = 'DELIVER'
+      `,
+      [tenantId, executionId],
+    );
+    const recovery = new PostgresExecutionRecoveryRepository(
+      runtimeDataSource,
+      runtimeConfig.schema,
+    );
+    await expect(recovery.recoverExpiredLeases(10, 1_000)).resolves.toEqual({
+      processed: 1,
+    });
+    await expect(
+      pipeline.findDelivery(tenantId, executionId),
+    ).resolves.toMatchObject({ status: 'UNKNOWN' });
+    await pipeline.completeUnknownDelivery({
+      appliedAt: new Date(),
+      causationId: randomUUID(),
+      executionId,
+      expectedStateVersion: deliverClaim.execution.stateVersion + 1,
+      externalResourceId: 'fake-invoice-1',
+      externalResourceNumber: 'PI-0001',
+      externalResourceType: 'purchaseInvoiceDraft',
+      externalVersion: '1',
+      operationId: delivery.id,
+      tenantId,
+    });
+
+    await expect(
+      executions.findById(tenantId, executionId),
+    ).resolves.toMatchObject({
+      currentStage: 'DELIVER',
+      stateVersion: 7,
+      status: 'SUCCEEDED',
+    });
+    await expect(
+      pipeline.findDelivery(tenantId, executionId),
+    ).resolves.toMatchObject({ status: 'APPLIED' });
   });
 });

@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 
 import type { DataSource, EntityManager, QueryRunner } from 'typeorm';
 
@@ -12,6 +12,8 @@ import type {
   ExecutionStage,
   ExecutionStageSnapshot,
   ExecutionStatus,
+  FailExecutionStageInput,
+  RetryExecutionInput,
   SafeExecutionFailure,
   ScheduleExecutionRetryInput,
   StageAttemptRecord,
@@ -157,6 +159,7 @@ export class PostgresExecutionRepository implements ExecutionRepository {
   private readonly documents: string;
   private readonly executions: string;
   private readonly inboxMessages: string;
+  private readonly idempotency: string;
   private readonly stages: string;
   private readonly attempts: string;
   private readonly versions: string;
@@ -171,6 +174,7 @@ export class PostgresExecutionRepository implements ExecutionRepository {
     this.documents = table(schema, 'documents');
     this.executions = table(schema, 'executions');
     this.inboxMessages = table(schema, 'inbox_messages');
+    this.idempotency = table(schema, 'idempotency_records');
     this.stages = table(schema, 'execution_stages');
     this.attempts = table(schema, 'stage_attempts');
     this.versions = table(schema, 'workflow_versions');
@@ -727,6 +731,106 @@ export class PostgresExecutionRepository implements ExecutionRepository {
     return execution;
   }
 
+  async failStage(input: FailExecutionStageInput): Promise<ExecutionRecord> {
+    await this.dataSource.transaction(async (manager) => {
+      const execution = await this.lockExecution(
+        manager,
+        input.tenantId,
+        input.executionId,
+        input.expectedStateVersion,
+        input.stage,
+      );
+      const stage = await this.lockRunningStage(
+        manager,
+        input.tenantId,
+        input.executionId,
+        input.stage,
+        input.leaseOwner,
+      );
+      const attempts = mutationRows<{ id: string }>(
+        await manager.query(
+          `
+            UPDATE ${this.attempts}
+            SET status = 'FAILED',
+                finished_at = clock_timestamp(),
+                failure_code = $6,
+                failure_category = $7
+            WHERE tenant_id = $1
+              AND execution_id = $2
+              AND execution_stage_id = $3
+              AND attempt_number = $4
+              AND lease_owner = $5
+              AND status = 'RUNNING'
+            RETURNING id
+          `,
+          [
+            input.tenantId,
+            input.executionId,
+            stage.id,
+            Number(stage.attempt_count),
+            input.leaseOwner,
+            input.failure.code,
+            input.failure.category,
+          ],
+        ),
+      );
+      if (attempts.length !== 1) {
+        throw new Error('STAGE_ATTEMPT_CONFLICT');
+      }
+      await manager.query(
+        `
+          UPDATE ${this.stages}
+          SET status = 'FAILED',
+              state_version = state_version + 1,
+              lease_owner = NULL,
+              lease_expires_at = NULL,
+              failure_code = $3,
+              failure_category = $4,
+              updated_at = clock_timestamp()
+          WHERE tenant_id = $1 AND id = $2
+        `,
+        [input.tenantId, stage.id, input.failure.code, input.failure.category],
+      );
+      await manager.query(
+        `
+          UPDATE ${this.executions}
+          SET status = 'FAILED',
+              state_version = state_version + 1,
+              failure_code = $4,
+              failure_category = $5,
+              failure_message = $6,
+              transitioned_at = clock_timestamp(),
+              completed_at = clock_timestamp()
+          WHERE tenant_id = $1 AND id = $2 AND state_version = $3
+        `,
+        [
+          input.tenantId,
+          input.executionId,
+          input.expectedStateVersion,
+          input.failure.code,
+          input.failure.category,
+          input.failure.message,
+        ],
+      );
+      await this.appendAudit(manager, {
+        action: 'execution.fail',
+        actorId: execution.actor_id,
+        actorType: execution.actor_type,
+        causationId: execution.causation_id,
+        correlationId: execution.correlation_id,
+        executionId: execution.id,
+        projectId: execution.project_id,
+        tenantId: execution.tenant_id,
+        workflowVersionId: execution.workflow_version_id,
+      });
+    });
+    const execution = await this.findById(input.tenantId, input.executionId);
+    if (execution === undefined) {
+      throw new Error('EXECUTION_FAIL_INCONSISTENT');
+    }
+    return execution;
+  }
+
   async findById(
     tenantId: string,
     executionId: string,
@@ -833,6 +937,227 @@ export class PostgresExecutionRepository implements ExecutionRepository {
       workflowId: execution.workflow_id,
       workflowVersionId: execution.workflow_version_id,
     };
+  }
+
+  async listByWorkflow(
+    tenantId: string,
+    workflowId: string,
+    limit = 50,
+  ): Promise<readonly ExecutionRecord[]> {
+    if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
+      throw new Error('EXECUTION_LIST_LIMIT_INVALID');
+    }
+    const rows = (await this.dataSource.query(
+      `
+        SELECT id
+        FROM ${this.executions}
+        WHERE tenant_id = $1 AND workflow_id = $2
+        ORDER BY created_at DESC, id DESC
+        LIMIT $3
+      `,
+      [tenantId, workflowId, limit],
+    )) as { id: string }[];
+    const records = await Promise.all(
+      rows.map((row) => this.findById(tenantId, row.id)),
+    );
+    return records.filter(
+      (record): record is ExecutionRecord => record !== undefined,
+    );
+  }
+
+  async listAuditEvents(
+    tenantId: string,
+    executionId: string,
+    limit = 100,
+  ): Promise<
+    readonly {
+      readonly action: string;
+      readonly causationId: string;
+      readonly correlationId: string;
+      readonly occurredAt: Date;
+      readonly outcome: string;
+    }[]
+  > {
+    if (!Number.isInteger(limit) || limit < 1 || limit > 200) {
+      throw new Error('AUDIT_LIST_LIMIT_INVALID');
+    }
+    const rows = (await this.dataSource.query(
+      `
+        SELECT action, outcome, correlation_id, causation_id, occurred_at
+        FROM ${this.auditEvents}
+        WHERE tenant_id = $1
+          AND resource_type = 'EXECUTION'
+          AND resource_id = $2
+        ORDER BY occurred_at, id
+        LIMIT $3
+      `,
+      [tenantId, executionId, limit],
+    )) as {
+      action: string;
+      causation_id: string;
+      correlation_id: string;
+      occurred_at: Date | string;
+      outcome: string;
+    }[];
+    return rows.map((row) => ({
+      action: row.action,
+      causationId: row.causation_id,
+      correlationId: row.correlation_id,
+      occurredAt: new Date(row.occurred_at),
+      outcome: row.outcome,
+    }));
+  }
+
+  async retry(input: RetryExecutionInput): Promise<ExecutionRecord> {
+    if (
+      input.idempotencyKey.trim().length === 0 ||
+      input.idempotencyKey.length > 256
+    ) {
+      throw new Error('IDEMPOTENCY_KEY_INVALID');
+    }
+    const fingerprint = createHash('sha256')
+      .update(input.executionId)
+      .digest('hex');
+    const retryId = await this.dataSource.transaction(async (manager) => {
+      const inserted = (await manager.query(
+        `
+          INSERT INTO ${this.idempotency} (
+            id, tenant_id, operation_scope, idempotency_key,
+            request_fingerprint, status, resource_type, resource_id,
+            completed_at, expires_at
+          ) VALUES (
+            $1, $2, 'execution.retry', $3, $4, 'COMPLETED',
+            'EXECUTION', $5, clock_timestamp(), clock_timestamp() + interval '90 days'
+          )
+          ON CONFLICT (tenant_id, operation_scope, idempotency_key) DO NOTHING
+          RETURNING resource_id
+        `,
+        [
+          randomUUID(),
+          input.tenantId,
+          input.idempotencyKey,
+          fingerprint,
+          input.retryExecutionId,
+        ],
+      )) as { resource_id: string }[];
+      if (inserted.length === 0) {
+        const existing = (await manager.query(
+          `
+            SELECT request_fingerprint, resource_id
+            FROM ${this.idempotency}
+            WHERE tenant_id = $1
+              AND operation_scope = 'execution.retry'
+              AND idempotency_key = $2
+            FOR UPDATE
+          `,
+          [input.tenantId, input.idempotencyKey],
+        )) as { request_fingerprint: string; resource_id: string | null }[];
+        if (existing[0]?.request_fingerprint !== fingerprint) {
+          throw new Error('IDEMPOTENCY_KEY_REUSED');
+        }
+        if (existing[0]?.resource_id === null || existing[0] === undefined) {
+          throw new Error('IDEMPOTENCY_IN_PROGRESS');
+        }
+        return existing[0].resource_id;
+      }
+
+      const originals = (await manager.query(
+        `
+          SELECT ${executionColumns}
+          FROM ${this.executions}
+          WHERE tenant_id = $1 AND id = $2
+          FOR UPDATE
+        `,
+        [input.tenantId, input.executionId],
+      )) as ExecutionRow[];
+      const original = originals[0];
+      if (
+        original === undefined ||
+        original.status !== 'FAILED' ||
+        !['EXTRACT', 'MAP'].includes(original.current_stage)
+      ) {
+        throw new Error('EXECUTION_RETRY_NOT_ALLOWED');
+      }
+      await manager.query('SET CONSTRAINTS executions_root_fk DEFERRED');
+      await manager.query(
+        `
+          INSERT INTO ${this.executions} (
+            id, tenant_id, project_id, workflow_id, workflow_version_id,
+            document_id, root_execution_id, retry_of_execution_id,
+            status, current_stage, actor_type, actor_id,
+            correlation_id, causation_id
+          ) VALUES (
+            $1, $2, $3, $4, $5, $6, $7, $8,
+            'QUEUED', 'EXTRACT', $9, $10, $11, $12
+          )
+        `,
+        [
+          input.retryExecutionId,
+          original.tenant_id,
+          original.project_id,
+          original.workflow_id,
+          original.workflow_version_id,
+          original.document_id,
+          original.root_execution_id,
+          original.id,
+          input.actor.type,
+          input.actor.id,
+          input.correlationId,
+          input.causationId,
+        ],
+      );
+      for (const stage of ['EXTRACT', 'MAP', 'REVIEW', 'DELIVER'] as const) {
+        await manager.query(
+          `
+            INSERT INTO ${this.stages} (
+              id, tenant_id, execution_id, stage, status
+            ) VALUES ($1, $2, $3, $4, $5)
+          `,
+          [
+            randomUUID(),
+            input.tenantId,
+            input.retryExecutionId,
+            stage,
+            stage === 'REVIEW' ? 'SKIPPED' : 'PENDING',
+          ],
+        );
+      }
+      const message = createMessageEnvelope({
+        actor: input.actor,
+        causationId: input.causationId,
+        correlationId: input.correlationId,
+        data: {
+          executionId: input.retryExecutionId,
+          expectedStateVersion: 0,
+          stage: 'EXTRACT',
+        },
+        projectId: original.project_id,
+        tenantId: original.tenant_id,
+        type: 'aiflow.execution.stage.extract.requested.v1',
+      });
+      await this.outbox.append(queryRunner(manager), {
+        aggregateId: input.retryExecutionId,
+        aggregateType: 'EXECUTION',
+        envelope: message,
+      });
+      await this.appendAudit(manager, {
+        action: 'execution.retry.create',
+        actorId: input.actor.id,
+        actorType: input.actor.type,
+        causationId: input.causationId,
+        correlationId: input.correlationId,
+        executionId: input.retryExecutionId,
+        projectId: original.project_id,
+        tenantId: input.tenantId,
+        workflowVersionId: original.workflow_version_id,
+      });
+      return input.retryExecutionId;
+    });
+    const execution = await this.findById(input.tenantId, retryId);
+    if (execution === undefined) {
+      throw new Error('EXECUTION_RETRY_INCONSISTENT');
+    }
+    return execution;
   }
 
   private async lockExecution(
