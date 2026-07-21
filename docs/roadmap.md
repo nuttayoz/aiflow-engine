@@ -9,14 +9,13 @@ This roadmap controls implementation order. A phase starts only after its entry 
 | Phase 0A | Repository skeleton                | Complete      |
 | Phase 0B | Contract and platform discovery    | Complete      |
 | Phase 1  | Reliable engine foundation         | Code complete |
-| Phase 2  | Direct-upload proof and demo       | In progress   |
+| Phase 2  | Direct-upload proof and demo       | Complete      |
 | Phase 3  | Existing DevPortal compatibility   | Not started   |
 | Phase 4  | SharePoint entry and destination   | Not started   |
 | Phase 5  | Templates and review               | Not started   |
 | Phase 6  | Migration, cutover, and retirement | Not started   |
 
-Phase 2 is under active implementation. Phase 3 and later product behavior is
-not implemented.
+Phase 2 is complete. Phase 3 and later product behavior is not implemented.
 
 ## Phase 0A: repository skeleton
 
@@ -177,7 +176,7 @@ Verification:
 
 ## Phase 2: direct-upload proof with internal demo harness
 
-Status: in progress.
+Status: complete.
 
 Purpose: deliver and demonstrate one complete workflow without n8n, review, or changes to the real DevPortal.
 
@@ -199,6 +198,26 @@ Implemented:
 - Verified single/multipart completion with exact S3 metadata, lost-response
   reconciliation, and one atomic document, execution, stage, outbox,
   idempotency, and audit commit guarded by the pinned workflow version.
+- Additive pipeline persistence for immutable extraction/mapping artifacts,
+  durable provider requests, authenticated callback deduplication, and stable
+  destination effects/receipts.
+- Frozen `invoice-basic-v1` extraction profile, bounded canonical result
+  validation, fake-provider submission/reconciliation, HMAC callback
+  authentication, and outage/throttle/timeout test modes.
+- Deterministic mapping into the Business Central purchase-invoice-draft action
+  with immutable S3 output and payload hashing.
+- Business Central descriptor and effective-once delivery processor with safe
+  throttling retry, uncertain-write lookup, deadline failure, and durable
+  receipt state.
+- API, worker, and scheduler composition for the complete flow, including due
+  retry/reconciliation scans and expired-upload cleanup.
+- Bearer-protected canonical workflow/catalog/upload/execution endpoints with
+  tenant/project isolation, idempotent mutations, safe failure details, audit
+  facts, and guarded pre-delivery execution retry.
+- Shared typed `@aiflow/api-client`, frozen Phase 2 request/response fixtures,
+  and a disposable DevPortal-shaped browser harness under `tools/demo-ui`.
+- Automated Phase 2 smoke proof using only public APIs and presigned S3 transfer,
+  including API restart after durable upload acceptance.
 
 Scope:
 
@@ -228,6 +247,19 @@ Exit criteria:
 - The internal demo UI proves the DevPortal-shaped journey against the real engine APIs without database, queue, or worker backdoors.
 - Canonical request/response fixtures from the demo are frozen for the Phase 3 DevPortal client migration.
 - The real `devportal` and `devportal-backend` repositories remain unchanged throughout Phase 2.
+
+Verification:
+
+- `bun run check` passes static analysis, type checking, unit tests, and format checks.
+- `bun run test:integration` passes real PostgreSQL, RabbitMQ, and local
+  S3-compatible integration contracts, including callback deduplication and
+  destination lease-expiry reconciliation.
+- `bun run phase2:smoke` proves canonical API -> S3 -> OCR -> mapping -> Business
+  Central delivery across separate runtime processes and an API restart.
+- The browser harness creates/activates a workflow and completes an uploaded
+  document with `EXTRACT`, `MAP`, and `DELIVER` succeeded and `REVIEW` skipped.
+- Fake identity/provider adapters fail closed for production composition; real
+  platform/provider adapters remain explicit Phase 3/deployment work.
 
 ## Phase 3: existing DevPortal compatibility and provisioning
 
