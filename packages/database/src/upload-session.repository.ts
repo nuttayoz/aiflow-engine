@@ -1,15 +1,19 @@
 import { createHash, randomUUID } from 'node:crypto';
 
-import type { DataSource, EntityManager } from 'typeorm';
+import type { DataSource, EntityManager, QueryRunner } from 'typeorm';
 
+import { createMessageEnvelope } from '@aiflow/messaging';
 import {
   abortUploadSession,
   attachMultipartUpload,
   buildStorageObjectKey,
+  completeUploadSession,
   createUploadSessionLifecycle,
   createUploadSessionPart,
   expireUploadSession,
   reconcileUploadSessionPart,
+  type CommitUploadSessionInput,
+  type CommitUploadSessionResult,
   type CreateUploadSessionInput,
   type PinUploadSessionPartInput,
   type PinUploadSessionPartResult,
@@ -20,6 +24,7 @@ import {
   type UploadSessionRepository,
 } from '@aiflow/storage';
 
+import { PostgresOutboxRepository } from './outbox.repository';
 import { mutationRows, table } from './sql';
 
 interface UploadSessionRow {
@@ -170,11 +175,22 @@ const requestFingerprint = (input: CreateUploadSessionInput): string =>
 
 type CloseKind = 'ABORTED' | 'EXPIRED';
 
+const queryRunner = (manager: EntityManager): QueryRunner => {
+  if (manager.queryRunner === undefined) {
+    throw new Error('DATABASE_TRANSACTION_REQUIRED');
+  }
+  return manager.queryRunner;
+};
+
 export class PostgresUploadSessionRepository implements UploadSessionRepository {
   private readonly auditEvents: string;
+  private readonly documents: string;
+  private readonly executions: string;
   private readonly idempotency: string;
+  private readonly outbox: PostgresOutboxRepository;
   private readonly parts: string;
   private readonly sessions: string;
+  private readonly stages: string;
   private readonly storageObjects: string;
   private readonly versions: string;
   private readonly workflows: string;
@@ -184,9 +200,13 @@ export class PostgresUploadSessionRepository implements UploadSessionRepository 
     schema: string,
   ) {
     this.auditEvents = table(schema, 'audit_events');
+    this.documents = table(schema, 'documents');
+    this.executions = table(schema, 'executions');
     this.idempotency = table(schema, 'idempotency_records');
+    this.outbox = new PostgresOutboxRepository(dataSource, schema);
     this.parts = table(schema, 'upload_session_parts');
     this.sessions = table(schema, 'upload_sessions');
+    this.stages = table(schema, 'execution_stages');
     this.storageObjects = table(schema, 'storage_objects');
     this.versions = table(schema, 'workflow_versions');
     this.workflows = table(schema, 'workflows');
@@ -347,6 +367,301 @@ export class PostgresUploadSessionRepository implements UploadSessionRepository 
     return rows[0] === undefined ? undefined : mapSession(rows[0]);
   }
 
+  async findParts(
+    tenantId: string,
+    uploadSessionId: string,
+  ): Promise<readonly UploadSessionPartRecord[]> {
+    const rows = (await this.dataSource.query(
+      `
+        SELECT ${partColumns}
+        FROM ${this.parts}
+        WHERE tenant_id = $1 AND upload_session_id = $2
+        ORDER BY part_number
+      `,
+      [tenantId, uploadSessionId],
+    )) as UploadSessionPartRow[];
+    return rows.map(mapPart);
+  }
+
+  async commitCompletion(
+    input: CommitUploadSessionInput,
+  ): Promise<CommitUploadSessionResult> {
+    if (
+      input.idempotencyKey.trim().length === 0 ||
+      input.idempotencyKey.length > 256
+    ) {
+      throw new Error('IDEMPOTENCY_KEY_INVALID');
+    }
+    return this.dataSource.transaction(async (manager) => {
+      const current = await this.lock(manager, input);
+      const fingerprint = createHash('sha256')
+        .update(JSON.stringify({ uploadSessionId: current.session.id }))
+        .digest('hex');
+      await this.acquireCompletionIdempotency(manager, input, fingerprint);
+      if (current.session.status === 'COMPLETED') {
+        if (
+          current.session.documentId === undefined ||
+          current.session.executionId === undefined
+        ) {
+          throw new Error('UPLOAD_SESSION_COMPLETION_INCONSISTENT');
+        }
+        await this.completeIdempotency(
+          manager,
+          input,
+          fingerprint,
+          current.session.documentId,
+          current.session.executionId,
+        );
+        return {
+          documentId: current.session.documentId,
+          executionId: current.session.executionId,
+          session: current.session,
+        };
+      }
+
+      const workflowRows = (await manager.query(
+        `
+          SELECT COALESCE(
+            (version.definition #>> '{reviewPolicy,required}')::boolean,
+            false
+          ) AS review_required
+          FROM ${this.workflows} AS workflow
+          JOIN ${this.versions} AS version
+            ON version.tenant_id = workflow.tenant_id
+           AND version.workflow_id = workflow.id
+           AND version.id = workflow.active_version_id
+          WHERE workflow.tenant_id = $1
+            AND workflow.project_id = $2
+            AND workflow.id = $3
+            AND workflow.active_version_id = $4
+            AND workflow.status = 'ACTIVE'
+            AND workflow.accepting_new_documents
+          FOR UPDATE OF workflow
+        `,
+        [
+          current.session.tenantId,
+          current.session.projectId,
+          current.session.workflowId,
+          current.session.workflowVersionId,
+        ],
+      )) as { review_required: boolean }[];
+      const workflow = workflowRows[0];
+      if (workflow === undefined) {
+        throw new Error('WORKFLOW_NOT_ACCEPTING_DOCUMENTS');
+      }
+
+      const next = completeUploadSession(current.session, {
+        documentId: input.documentId,
+        executionId: input.executionId,
+        expectedStateVersion: current.session.stateVersion,
+        now: current.now,
+      });
+      const storageRows = mutationRows<{ id: string }>(
+        await manager.query(
+          `
+            UPDATE ${this.storageObjects}
+            SET status = 'AVAILABLE',
+                state_version = state_version + 1,
+                version_id = $4,
+                size_bytes = $5,
+                content_type = $6,
+                checksum_algorithm = $7,
+                checksum_type = $8,
+                checksum_value = $9,
+                encryption_mode = $10,
+                encryption_key_ref = $11,
+                available_at = $12,
+                updated_at = $12,
+                failure_code = NULL
+            WHERE tenant_id = $1
+              AND id = $2
+              AND project_id = $3
+              AND status = 'RESERVED'
+              AND object_key = $13
+            RETURNING id
+          `,
+          [
+            current.session.tenantId,
+            current.session.storageObjectId,
+            current.session.projectId,
+            input.metadata.versionId,
+            input.metadata.sizeBytes,
+            input.metadata.contentType,
+            input.metadata.checksum.algorithm,
+            input.metadata.checksum.type,
+            input.metadata.checksum.value,
+            input.metadata.encryptionMode,
+            input.metadata.encryptionKeyRef ?? null,
+            current.now,
+            input.metadata.key,
+          ],
+        ),
+      );
+      if (storageRows.length !== 1) {
+        throw new Error('UPLOAD_SESSION_STORAGE_TRANSITION_CONFLICT');
+      }
+
+      await manager.query(
+        `
+          INSERT INTO ${this.documents} (
+            id,
+            tenant_id,
+            project_id,
+            source_connector_id,
+            source_identity,
+            source_version,
+            source_storage_object_id,
+            size_bytes,
+            content_type,
+            checksum_algorithm,
+            checksum_value,
+            original_filename,
+            staged_at
+          ) VALUES (
+            $1, $2, $3, 'direct-upload', $4, $5, $6, $7, $8, $9, $10, $11, $12
+          )
+        `,
+        [
+          input.documentId,
+          current.session.tenantId,
+          current.session.projectId,
+          current.session.id,
+          input.metadata.versionId,
+          current.session.storageObjectId,
+          input.metadata.sizeBytes,
+          input.metadata.contentType,
+          input.metadata.checksum.algorithm,
+          input.metadata.checksum.value,
+          current.session.originalFilename,
+          current.now,
+        ],
+      );
+      await manager.query('SET CONSTRAINTS executions_root_fk DEFERRED');
+      await manager.query(
+        `
+          INSERT INTO ${this.executions} (
+            id,
+            tenant_id,
+            project_id,
+            workflow_id,
+            workflow_version_id,
+            document_id,
+            root_execution_id,
+            status,
+            current_stage,
+            actor_type,
+            actor_id,
+            correlation_id,
+            causation_id,
+            created_at,
+            transitioned_at
+          ) VALUES (
+            $1, $2, $3, $4, $5, $6, $1, 'QUEUED', 'EXTRACT',
+            $7, $8, $9, $10, $11, $11
+          )
+        `,
+        [
+          input.executionId,
+          current.session.tenantId,
+          current.session.projectId,
+          current.session.workflowId,
+          current.session.workflowVersionId,
+          input.documentId,
+          input.actor.type,
+          input.actor.id,
+          input.correlationId,
+          input.causationId,
+          current.now,
+        ],
+      );
+      for (const stage of ['EXTRACT', 'MAP', 'REVIEW', 'DELIVER'] as const) {
+        await manager.query(
+          `
+            INSERT INTO ${this.stages} (
+              id, tenant_id, execution_id, stage, status, created_at, updated_at
+            ) VALUES ($1, $2, $3, $4, $5, $6, $6)
+          `,
+          [
+            randomUUID(),
+            current.session.tenantId,
+            input.executionId,
+            stage,
+            stage === 'REVIEW' && !workflow.review_required
+              ? 'SKIPPED'
+              : 'PENDING',
+            current.now,
+          ],
+        );
+      }
+
+      const message = createMessageEnvelope({
+        actor: input.actor,
+        causationId: input.causationId,
+        correlationId: input.correlationId,
+        data: {
+          executionId: input.executionId,
+          expectedStateVersion: 0,
+          stage: 'EXTRACT',
+        },
+        occurredAt: current.now,
+        projectId: current.session.projectId,
+        tenantId: current.session.tenantId,
+        type: 'aiflow.execution.stage.extract.requested.v1',
+      });
+      await this.outbox.append(queryRunner(manager), {
+        aggregateId: input.executionId,
+        aggregateType: 'EXECUTION',
+        availableAt: current.now,
+        envelope: message,
+      });
+
+      const sessionRows = mutationRows<UploadSessionRow>(
+        await manager.query(
+          `
+            UPDATE ${this.sessions}
+            SET status = 'COMPLETED',
+                state_version = state_version + 1,
+                document_id = $4,
+                execution_id = $5,
+                completed_at = $6,
+                updated_at = $6
+            WHERE tenant_id = $1 AND id = $2 AND state_version = $3
+            RETURNING ${columns}
+          `,
+          [
+            current.session.tenantId,
+            current.session.id,
+            current.session.stateVersion,
+            input.documentId,
+            input.executionId,
+            next.completedAt,
+          ],
+        ),
+      );
+      if (sessionRows[0] === undefined) {
+        throw new Error('UPLOAD_SESSION_TRANSITION_CONFLICT');
+      }
+      await this.completeIdempotency(
+        manager,
+        input,
+        fingerprint,
+        input.documentId,
+        input.executionId,
+      );
+      await this.appendAudit(
+        manager,
+        { ...input, projectId: current.session.projectId },
+        'upload-session.completed',
+      );
+      await this.appendExecutionCreatedAudit(manager, input, current.session);
+      return {
+        documentId: input.documentId,
+        executionId: input.executionId,
+        session: mapSession(sessionRows[0]),
+      };
+    });
+  }
+
   async pinPart(
     input: PinUploadSessionPartInput,
   ): Promise<PinUploadSessionPartResult> {
@@ -466,6 +781,94 @@ export class PostgresUploadSessionRepository implements UploadSessionRepository 
     input: UploadSessionMutationInput,
   ): Promise<UploadSessionRecord> {
     return this.close(input, 'EXPIRED');
+  }
+
+  private async acquireCompletionIdempotency(
+    manager: EntityManager,
+    input: CommitUploadSessionInput,
+    fingerprint: string,
+  ): Promise<void> {
+    const inserted = (await manager.query(
+      `
+        INSERT INTO ${this.idempotency} (
+          id,
+          tenant_id,
+          operation_scope,
+          idempotency_key,
+          request_fingerprint,
+          status,
+          expires_at
+        ) VALUES (
+          $1, $2, 'upload-session.complete', $3, $4, 'IN_PROGRESS',
+          clock_timestamp() + interval '90 days'
+        )
+        ON CONFLICT (tenant_id, operation_scope, idempotency_key) DO NOTHING
+        RETURNING id
+      `,
+      [randomUUID(), input.tenantId, input.idempotencyKey, fingerprint],
+    )) as { id: string }[];
+    if (inserted.length > 0) {
+      return;
+    }
+
+    const existing = (await manager.query(
+      `
+        SELECT request_fingerprint, status
+        FROM ${this.idempotency}
+        WHERE tenant_id = $1
+          AND operation_scope = 'upload-session.complete'
+          AND idempotency_key = $2
+        FOR UPDATE
+      `,
+      [input.tenantId, input.idempotencyKey],
+    )) as { request_fingerprint: string; status: string }[];
+    if (existing[0]?.request_fingerprint !== fingerprint) {
+      throw new Error('IDEMPOTENCY_KEY_REUSED');
+    }
+    if (existing[0]?.status !== 'COMPLETED') {
+      throw new Error('IDEMPOTENCY_IN_PROGRESS');
+    }
+  }
+
+  private async completeIdempotency(
+    manager: EntityManager,
+    input: CommitUploadSessionInput,
+    fingerprint: string,
+    documentId: string,
+    executionId: string,
+  ): Promise<void> {
+    const rows = mutationRows<{ id: string }>(
+      await manager.query(
+        `
+          UPDATE ${this.idempotency}
+          SET status = 'COMPLETED',
+              resource_type = 'EXECUTION',
+              resource_id = $4,
+              response = $5::jsonb,
+              completed_at = COALESCE(completed_at, clock_timestamp())
+          WHERE tenant_id = $1
+            AND operation_scope = 'upload-session.complete'
+            AND idempotency_key = $2
+            AND request_fingerprint = $3
+            AND status IN ('IN_PROGRESS', 'COMPLETED')
+          RETURNING id
+        `,
+        [
+          input.tenantId,
+          input.idempotencyKey,
+          fingerprint,
+          executionId,
+          JSON.stringify({
+            documentId,
+            executionId,
+            uploadSessionId: input.uploadSessionId,
+          }),
+        ],
+      ),
+    );
+    if (rows.length !== 1) {
+      throw new Error('IDEMPOTENCY_COMPLETION_CONFLICT');
+    }
   }
 
   private async acquireIdempotency(
@@ -662,6 +1065,45 @@ export class PostgresUploadSessionRepository implements UploadSessionRepository 
         input.uploadSessionId,
         input.correlationId,
         input.causationId,
+      ],
+    );
+  }
+
+  private async appendExecutionCreatedAudit(
+    manager: EntityManager,
+    input: CommitUploadSessionInput,
+    session: UploadSessionRecord,
+  ): Promise<void> {
+    await manager.query(
+      `
+        INSERT INTO ${this.auditEvents} (
+          id,
+          tenant_id,
+          project_id,
+          actor_type,
+          actor_id,
+          action,
+          resource_type,
+          resource_id,
+          outcome,
+          correlation_id,
+          causation_id,
+          workflow_version_id
+        ) VALUES (
+          $1, $2, $3, $4, $5, 'execution.create', 'EXECUTION', $6,
+          'SUCCEEDED', $7, $8, $9
+        )
+      `,
+      [
+        randomUUID(),
+        session.tenantId,
+        session.projectId,
+        input.actor.type,
+        input.actor.id,
+        input.executionId,
+        input.correlationId,
+        input.causationId,
+        session.workflowVersionId,
       ],
     );
   }

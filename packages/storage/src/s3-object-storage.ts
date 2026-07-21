@@ -35,10 +35,22 @@ import type {
   StorageChecksumType,
   StoredObjectMetadata,
 } from './types';
+import { compositeSha256Checksum } from './upload-session-part';
 
 const SHA256_BASE64_PATTERN = /^[A-Za-z0-9+/]{43}=$/u;
 const MAX_CAPABILITY_LIFETIME_SECONDS = 15 * 60;
 const MAX_MULTIPART_PARTS = 10_000;
+
+const compositePartCount = (value: string): number | undefined => {
+  const separator = value.lastIndexOf('-');
+  if (separator < 0 || !SHA256_BASE64_PATTERN.test(value.slice(0, separator))) {
+    return undefined;
+  }
+  const count = Number(value.slice(separator + 1));
+  return Number.isInteger(count) && count >= 2 && count <= MAX_MULTIPART_PARTS
+    ? count
+    : undefined;
+};
 
 const assertLocation = (key: string, versionId?: string): void => {
   if (!isStorageObjectKey(key)) {
@@ -55,7 +67,9 @@ const assertLocation = (key: string, versionId?: string): void => {
 const assertChecksum = (checksum: StorageChecksum): void => {
   if (
     checksum.algorithm !== 'SHA256' ||
-    !SHA256_BASE64_PATTERN.test(checksum.value)
+    (checksum.type === 'FULL_OBJECT'
+      ? !SHA256_BASE64_PATTERN.test(checksum.value)
+      : compositePartCount(checksum.value) === undefined)
   ) {
     throw new Error('STORAGE_CHECKSUM_INVALID');
   }
@@ -108,16 +122,6 @@ const requiredEncryptionHeaders = (
     : { 'x-amz-server-side-encryption-aws-kms-key-id': config.kmsKeyId }),
 });
 
-const compositeChecksum = (
-  parts: readonly { readonly checksumValue: string }[],
-): string => {
-  const hash = createHash('sha256');
-  for (const part of parts) {
-    hash.update(Buffer.from(part.checksumValue, 'base64'));
-  }
-  return hash.digest('base64');
-};
-
 const isNotFound = (error: unknown): boolean => {
   if (typeof error !== 'object' || error === null) {
     return false;
@@ -141,6 +145,31 @@ const metadataChecksum = (
   type: metadata?.['aiflow-checksum-type'],
   value: metadata?.['aiflow-checksum-sha256'],
 });
+
+const multipartCountFromEtag = (
+  etag: string | undefined,
+): number | undefined => {
+  const match = /-([0-9]+)"?$/u.exec(etag ?? '');
+  if (match?.[1] === undefined) {
+    return undefined;
+  }
+  const count = Number(match[1]);
+  return Number.isInteger(count) && count >= 2 && count <= MAX_MULTIPART_PARTS
+    ? count
+    : undefined;
+};
+
+const normalizeCompositeChecksum = (
+  value: string,
+  partCount: number | undefined,
+  allowMissingSuffix: boolean,
+): string =>
+  compositePartCount(value) !== undefined ||
+  !allowMissingSuffix ||
+  partCount === undefined ||
+  !SHA256_BASE64_PATTERN.test(value)
+    ? value
+    : `${value}-${partCount.toString()}`;
 
 const verifyingStream = (
   source: Readable,
@@ -393,7 +422,9 @@ export class S3ObjectStorage
         throw new Error('STORAGE_MULTIPART_PARTS_INVALID');
       }
     });
-    const expectedChecksum = compositeChecksum(input.parts);
+    const expectedChecksum = compositeSha256Checksum(
+      input.parts.map((part) => part.checksumValue),
+    );
     const response = await this.client.send(
       new CompleteMultipartUploadCommand({
         Bucket: this.config.bucket,
@@ -414,9 +445,17 @@ export class S3ObjectStorage
     if (response.VersionId === undefined || response.VersionId.length === 0) {
       throw new Error('STORAGE_VERSION_MISSING');
     }
+    const responseChecksum =
+      response.ChecksumSHA256 === undefined
+        ? undefined
+        : normalizeCompositeChecksum(
+            response.ChecksumSHA256,
+            input.parts.length,
+            this.config.allowChecksumMetadataFallback,
+          );
     if (
-      response.ChecksumSHA256 !== undefined &&
-      response.ChecksumSHA256 !== expectedChecksum
+      responseChecksum !== undefined &&
+      responseChecksum !== expectedChecksum
     ) {
       throw new Error('STORAGE_INTEGRITY_MISMATCH');
     }
@@ -446,22 +485,40 @@ export class S3ObjectStorage
     );
   }
 
+  async inspectUpload(input: {
+    readonly storageObjectId: string;
+    readonly tenantId: string;
+    readonly versionId?: string;
+  }): Promise<StoredObjectMetadata | undefined> {
+    return this.headObject(
+      buildStorageObjectKey(input.tenantId, input.storageObjectId),
+      input.versionId,
+    );
+  }
+
   async headExactVersion(input: {
     key: string;
     versionId: string;
   }): Promise<StoredObjectMetadata | undefined> {
-    assertLocation(input.key, input.versionId);
+    return this.headObject(input.key, input.versionId);
+  }
+
+  private async headObject(
+    key: string,
+    versionId?: string,
+  ): Promise<StoredObjectMetadata | undefined> {
+    assertLocation(key, versionId);
     try {
       const response = await this.client.send(
         new HeadObjectCommand({
           Bucket: this.config.bucket,
           ChecksumMode: 'ENABLED',
-          Key: input.key,
-          VersionId: input.versionId,
+          Key: key,
+          ...(versionId === undefined ? {} : { VersionId: versionId }),
         }),
       );
       const fallback = metadataChecksum(response.Metadata);
-      const checksumValue =
+      let checksumValue =
         response.ChecksumSHA256 ??
         (this.config.allowChecksumMetadataFallback
           ? fallback.value
@@ -473,9 +530,29 @@ export class S3ObjectStorage
         response.VersionId === undefined ||
         response.ContentLength === undefined ||
         checksumValue === undefined ||
-        rawChecksumType === undefined
+        rawChecksumType === undefined ||
+        response.ServerSideEncryption === undefined
       ) {
         throw new Error('STORAGE_METADATA_INCOMPLETE');
+      }
+      if (checksumType(rawChecksumType) === 'COMPOSITE') {
+        checksumValue = normalizeCompositeChecksum(
+          checksumValue,
+          multipartCountFromEtag(response.ETag),
+          this.config.allowChecksumMetadataFallback,
+        );
+      }
+      assertChecksum({
+        algorithm: 'SHA256',
+        type: checksumType(rawChecksumType),
+        value: checksumValue,
+      });
+      if (
+        response.ServerSideEncryption !== this.config.encryptionMode ||
+        (this.config.kmsKeyId !== undefined &&
+          response.SSEKMSKeyId !== this.config.kmsKeyId)
+      ) {
+        throw new Error('STORAGE_ENCRYPTION_MISMATCH');
       }
 
       return {
@@ -488,9 +565,8 @@ export class S3ObjectStorage
         ...(response.SSEKMSKeyId === undefined
           ? {}
           : { encryptionKeyRef: response.SSEKMSKeyId }),
-        encryptionMode:
-          response.ServerSideEncryption ?? this.config.encryptionMode,
-        key: input.key,
+        encryptionMode: response.ServerSideEncryption,
+        key,
         sizeBytes: response.ContentLength,
         versionId: response.VersionId,
       };
@@ -514,12 +590,22 @@ export class S3ObjectStorage
       }),
     );
     const fallback = metadataChecksum(response.Metadata);
-    const checksumValue =
+    let checksumValue =
       response.ChecksumSHA256 ??
       (this.config.allowChecksumMetadataFallback ? fallback.value : undefined);
     const rawChecksumType =
       response.ChecksumType ??
       (this.config.allowChecksumMetadataFallback ? fallback.type : undefined);
+    if (
+      checksumValue !== undefined &&
+      checksumType(rawChecksumType) === 'COMPOSITE'
+    ) {
+      checksumValue = normalizeCompositeChecksum(
+        checksumValue,
+        compositePartCount(input.expectedChecksum.value),
+        this.config.allowChecksumMetadataFallback,
+      );
+    }
     if (
       response.VersionId !== input.versionId ||
       checksumValue !== input.expectedChecksum.value ||

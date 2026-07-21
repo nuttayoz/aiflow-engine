@@ -4,15 +4,21 @@ import {
   DirectUploadService,
   selectDirectUploadPlan,
 } from './direct-upload';
+import { buildStorageObjectKey } from './key-policy';
 import type { DirectUploadStoragePort } from './port';
 import type { UploadSessionRepository } from './upload-session.port';
 import { createUploadSessionLifecycle } from './upload-session';
+import { compositeSha256Checksum } from './upload-session-part';
 
 const now = new Date('2026-07-21T08:00:00.000Z');
 const checksum = Buffer.alloc(32, 4).toString('base64');
 const ids = [
   '10000000-0000-4000-8000-000000000001',
   '10000000-0000-4000-8000-000000000002',
+];
+const completionIds = [
+  '30000000-0000-4000-8000-000000000001',
+  '30000000-0000-4000-8000-000000000002',
 ];
 
 const input = {
@@ -57,9 +63,11 @@ const session = (
 const repository = (): jest.Mocked<UploadSessionRepository> => ({
   abort: jest.fn(),
   attachMultipartUpload: jest.fn(),
+  commitCompletion: jest.fn(),
   create: jest.fn(),
   expire: jest.fn(),
   findById: jest.fn(),
+  findParts: jest.fn(),
   pinPart: jest.fn(),
 });
 
@@ -69,11 +77,52 @@ const objectStorage = (): jest.Mocked<DirectUploadStoragePort> => ({
   createMultipartPartCapability: jest.fn(),
   createMultipartUpload: jest.fn(),
   createSinglePutCapability: jest.fn(),
+  inspectUpload: jest.fn(),
 });
 
 const idGenerator = () => {
   let index = 0;
   return () => ids[index++]!;
+};
+
+const completeInput = {
+  actor: input.actor,
+  causationId: 'upload-complete-request-1',
+  correlationId: input.correlationId,
+  idempotencyKey: 'upload-complete-idempotency-1',
+  tenantId: input.tenantId,
+  uploadSessionId: ids[1]!,
+};
+
+const storedMetadata = (
+  active = session(),
+  overrides: Partial<{
+    checksum: {
+      algorithm: 'SHA256';
+      type: 'COMPOSITE' | 'FULL_OBJECT';
+      value: string;
+    };
+    contentType: string;
+    sizeBytes: number;
+    versionId: string;
+  }> = {},
+) => ({
+  checksum: {
+    algorithm: 'SHA256' as const,
+    type: 'FULL_OBJECT' as const,
+    value: active.clientChecksum.value,
+    ...overrides.checksum,
+  },
+  contentType: overrides.contentType ?? active.contentType,
+  encryptionMode: 'AES256',
+  key: buildStorageObjectKey(active.tenantId, active.storageObjectId),
+  sizeBytes: overrides.sizeBytes ?? active.sizeBytes,
+  versionId: overrides.versionId ?? 'stored-version-1',
+});
+
+const completionIdGenerator = () => {
+  let index = 0;
+  return () => completionIds[index++]!;
 };
 
 describe('direct upload application service', () => {
@@ -377,5 +426,299 @@ describe('direct upload application service', () => {
       tenantId: multipart.tenantId,
       uploadReference: 'internal-reference',
     });
+  });
+
+  it('verifies a single upload before committing its document and execution', async () => {
+    const sessions = repository();
+    const storage = objectStorage();
+    const active = session();
+    const metadata = storedMetadata(active);
+    const completed = {
+      ...active,
+      completedAt: now,
+      documentId: completionIds[0],
+      executionId: completionIds[1],
+      stateVersion: 1,
+      status: 'COMPLETED' as const,
+    };
+    sessions.findById.mockResolvedValue(active);
+    storage.inspectUpload.mockResolvedValue(metadata);
+    sessions.commitCompletion.mockResolvedValue({
+      documentId: completionIds[0]!,
+      executionId: completionIds[1]!,
+      session: completed,
+    });
+    const service = new DirectUploadService(
+      sessions,
+      storage,
+      DEFAULT_DIRECT_UPLOAD_POLICY,
+      () => now,
+      completionIdGenerator(),
+    );
+
+    await expect(service.complete(completeInput)).resolves.toEqual({
+      documentId: completionIds[0],
+      executionId: completionIds[1],
+      uploadSessionId: active.id,
+    });
+    expect(storage.inspectUpload).toHaveBeenCalledWith({
+      storageObjectId: active.storageObjectId,
+      tenantId: active.tenantId,
+    });
+    expect(sessions.commitCompletion).toHaveBeenCalledWith({
+      ...completeInput,
+      documentId: completionIds[0],
+      executionId: completionIds[1],
+      metadata,
+    });
+  });
+
+  it('completes multipart storage only from exact durable part receipts', async () => {
+    const sessions = repository();
+    const storage = objectStorage();
+    const active = session(
+      { partCount: 2, partSizeBytes: 16, type: 'MULTIPART' },
+      {
+        multipartUploadReference: 'internal-reference',
+        sizeBytes: 24,
+        stateVersion: 1,
+      },
+    );
+    const partChecksums = [
+      Buffer.alloc(32, 5).toString('base64'),
+      Buffer.alloc(32, 6).toString('base64'),
+    ];
+    const pinned = partChecksums.map((value, index) => ({
+      checksum: { algorithm: 'SHA256' as const, value },
+      createdAt: now,
+      partNumber: index + 1,
+      sizeBytes: index === 0 ? 16 : 8,
+      tenantId: active.tenantId,
+      uploadSessionId: active.id,
+    }));
+    const metadata = storedMetadata(active, {
+      checksum: {
+        algorithm: 'SHA256',
+        type: 'COMPOSITE',
+        value: compositeSha256Checksum(partChecksums),
+      },
+      versionId: 'multipart-version-1',
+    });
+    const receipts = pinned.map((part) => ({
+      checksumValue: part.checksum.value,
+      etag: `etag-${part.partNumber}`,
+      partNumber: part.partNumber,
+    }));
+    sessions.findById.mockResolvedValue(active);
+    sessions.findParts.mockResolvedValue(pinned);
+    storage.inspectUpload
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce(metadata);
+    storage.completeMultipartUpload.mockResolvedValue({
+      checksum: metadata.checksum,
+      versionId: metadata.versionId,
+    });
+    sessions.commitCompletion.mockResolvedValue({
+      documentId: completionIds[0]!,
+      executionId: completionIds[1]!,
+      session: {
+        ...active,
+        completedAt: now,
+        documentId: completionIds[0],
+        executionId: completionIds[1],
+        stateVersion: 2,
+        status: 'COMPLETED',
+      },
+    });
+    const service = new DirectUploadService(
+      sessions,
+      storage,
+      DEFAULT_DIRECT_UPLOAD_POLICY,
+      () => now,
+      completionIdGenerator(),
+    );
+
+    await expect(
+      service.complete({ ...completeInput, parts: receipts }),
+    ).resolves.toMatchObject({
+      documentId: completionIds[0],
+      executionId: completionIds[1],
+    });
+    expect(storage.completeMultipartUpload).toHaveBeenCalledWith({
+      parts: receipts,
+      sizeBytes: active.sizeBytes,
+      storageObjectId: active.storageObjectId,
+      tenantId: active.tenantId,
+      uploadReference: 'internal-reference',
+    });
+    expect(storage.inspectUpload).toHaveBeenLastCalledWith({
+      storageObjectId: active.storageObjectId,
+      tenantId: active.tenantId,
+      versionId: 'multipart-version-1',
+    });
+  });
+
+  it('reconciles an uncertain multipart completion by inspecting the current object', async () => {
+    const sessions = repository();
+    const storage = objectStorage();
+    const active = session(
+      { partCount: 2, partSizeBytes: 16, type: 'MULTIPART' },
+      {
+        multipartUploadReference: 'internal-reference',
+        sizeBytes: 24,
+        stateVersion: 1,
+      },
+    );
+    const partChecksums = [
+      Buffer.alloc(32, 5).toString('base64'),
+      Buffer.alloc(32, 6).toString('base64'),
+    ];
+    const pinned = partChecksums.map((value, index) => ({
+      checksum: { algorithm: 'SHA256' as const, value },
+      createdAt: now,
+      partNumber: index + 1,
+      sizeBytes: index === 0 ? 16 : 8,
+      tenantId: active.tenantId,
+      uploadSessionId: active.id,
+    }));
+    const metadata = storedMetadata(active, {
+      checksum: {
+        algorithm: 'SHA256',
+        type: 'COMPOSITE',
+        value: compositeSha256Checksum(partChecksums),
+      },
+      versionId: 'multipart-version-1',
+    });
+    sessions.findById.mockResolvedValue(active);
+    sessions.findParts.mockResolvedValue(pinned);
+    storage.inspectUpload
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce(metadata);
+    storage.completeMultipartUpload.mockRejectedValue(
+      new Error('STORAGE_COMPLETION_RESPONSE_LOST'),
+    );
+    sessions.commitCompletion.mockResolvedValue({
+      documentId: completionIds[0]!,
+      executionId: completionIds[1]!,
+      session: active,
+    });
+    const service = new DirectUploadService(
+      sessions,
+      storage,
+      DEFAULT_DIRECT_UPLOAD_POLICY,
+      () => now,
+      completionIdGenerator(),
+    );
+    const receipts = pinned.map((part) => ({
+      checksumValue: part.checksum.value,
+      etag: `etag-${part.partNumber}`,
+      partNumber: part.partNumber,
+    }));
+
+    await expect(
+      service.complete({ ...completeInput, parts: receipts }),
+    ).resolves.toMatchObject({ documentId: completionIds[0] });
+    expect(sessions.commitCompletion).toHaveBeenCalledWith(
+      expect.objectContaining({ metadata }),
+    );
+  });
+
+  it('rejects changed multipart receipts before completing storage', async () => {
+    const sessions = repository();
+    const storage = objectStorage();
+    const active = session(
+      { partCount: 2, partSizeBytes: 16, type: 'MULTIPART' },
+      {
+        multipartUploadReference: 'internal-reference',
+        sizeBytes: 24,
+        stateVersion: 1,
+      },
+    );
+    const pinned = [1, 2].map((partNumber) => ({
+      checksum: {
+        algorithm: 'SHA256' as const,
+        value: Buffer.alloc(32, partNumber).toString('base64'),
+      },
+      createdAt: now,
+      partNumber,
+      sizeBytes: partNumber === 1 ? 16 : 8,
+      tenantId: active.tenantId,
+      uploadSessionId: active.id,
+    }));
+    sessions.findById.mockResolvedValue(active);
+    sessions.findParts.mockResolvedValue(pinned);
+    const service = new DirectUploadService(
+      sessions,
+      storage,
+      DEFAULT_DIRECT_UPLOAD_POLICY,
+      () => now,
+      completionIdGenerator(),
+    );
+
+    await expect(
+      service.complete({
+        ...completeInput,
+        parts: pinned.map((part) => ({
+          checksumValue: part.partNumber === 2 ? checksum : part.checksum.value,
+          etag: `etag-${part.partNumber}`,
+          partNumber: part.partNumber,
+        })),
+      }),
+    ).rejects.toThrow(
+      new DirectUploadApplicationError('UPLOAD_COMPLETION_PARTS_INVALID'),
+    );
+    expect(storage.completeMultipartUpload).not.toHaveBeenCalled();
+    expect(sessions.commitCompletion).not.toHaveBeenCalled();
+  });
+
+  it('does not commit metadata that differs from the upload contract', async () => {
+    const sessions = repository();
+    const storage = objectStorage();
+    const active = session();
+    sessions.findById.mockResolvedValue(active);
+    storage.inspectUpload.mockResolvedValue(
+      storedMetadata(active, { sizeBytes: active.sizeBytes + 1 }),
+    );
+    const service = new DirectUploadService(
+      sessions,
+      storage,
+      DEFAULT_DIRECT_UPLOAD_POLICY,
+      () => now,
+      completionIdGenerator(),
+    );
+
+    await expect(service.complete(completeInput)).rejects.toThrow(
+      new DirectUploadApplicationError('UPLOAD_INTEGRITY_MISMATCH'),
+    );
+    expect(sessions.commitCompletion).not.toHaveBeenCalled();
+  });
+
+  it('returns the durable completion without touching storage again', async () => {
+    const sessions = repository();
+    const storage = objectStorage();
+    sessions.findById.mockResolvedValue(
+      session(undefined, {
+        completedAt: now,
+        documentId: completionIds[0],
+        executionId: completionIds[1],
+        stateVersion: 1,
+        status: 'COMPLETED',
+      }),
+    );
+    const service = new DirectUploadService(
+      sessions,
+      storage,
+      DEFAULT_DIRECT_UPLOAD_POLICY,
+      () => now,
+      completionIdGenerator(),
+    );
+
+    await expect(service.complete(completeInput)).resolves.toEqual({
+      documentId: completionIds[0],
+      executionId: completionIds[1],
+      uploadSessionId: ids[1],
+    });
+    expect(storage.inspectUpload).not.toHaveBeenCalled();
+    expect(sessions.commitCompletion).not.toHaveBeenCalled();
   });
 });

@@ -180,6 +180,17 @@ describe('S3 object storage contract', () => {
       },
       sizeBytes: body.length,
     });
+    await expect(
+      storage.inspectUpload({ storageObjectId, tenantId }),
+    ).resolves.toMatchObject({
+      checksum: {
+        algorithm: 'SHA256',
+        type: 'FULL_OBJECT',
+        value: checksumValue,
+      },
+      key,
+      versionId,
+    });
 
     const duplicate = await fetch(capability.url, {
       body,
@@ -240,13 +251,24 @@ describe('S3 object storage contract', () => {
     expect(completed).toMatchObject({
       checksum: { algorithm: 'SHA256', type: 'COMPOSITE' },
     });
-    expect(completed.checksum.value).toMatch(/^[A-Za-z0-9+/]{43}=$/u);
+    expect(completed.checksum.value).toMatch(/^[A-Za-z0-9+/]{43}=-2$/u);
 
     await expect(
       storage.headExactVersion({ key, versionId: completed.versionId }),
     ).resolves.toMatchObject({
       checksum: completed.checksum,
       sizeBytes: firstPart.length + secondPart.length,
+    });
+    await expect(
+      storage.inspectUpload({
+        storageObjectId,
+        tenantId,
+        versionId: completed.versionId,
+      }),
+    ).resolves.toMatchObject({
+      checksum: completed.checksum,
+      key,
+      versionId: completed.versionId,
     });
     const response = await client.send(
       new GetObjectCommand({

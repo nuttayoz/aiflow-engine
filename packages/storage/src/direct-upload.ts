@@ -2,9 +2,18 @@ import { randomUUID } from 'node:crypto';
 
 import type { ActorIdentity } from '@aiflow/core';
 
-import type { DirectUploadStoragePort, UploadCapability } from './port';
+import type {
+  DirectUploadStoragePort,
+  MultipartPartReceipt,
+  UploadCapability,
+} from './port';
 import type { UploadSessionRepository } from './upload-session.port';
+import {
+  compositeSha256Checksum,
+  type UploadSessionPartRecord,
+} from './upload-session-part';
 import type { UploadPlan, UploadSessionRecord } from './upload-session';
+import type { StoredObjectMetadata } from './types';
 
 const MEBIBYTE = 1024 * 1024;
 const DAY_SECONDS = 24 * 60 * 60;
@@ -32,8 +41,12 @@ export type DirectUploadApplicationErrorCode =
   | 'UPLOAD_SESSION_EXPIRED'
   | 'UPLOAD_SESSION_MULTIPART_NOT_READY'
   | 'UPLOAD_SESSION_NOT_ACTIVE'
+  | 'UPLOAD_SESSION_NOT_FOUND'
   | 'UPLOAD_SESSION_SIZE_INVALID'
-  | 'UPLOAD_SESSION_SIZE_LIMIT_EXCEEDED';
+  | 'UPLOAD_SESSION_SIZE_LIMIT_EXCEEDED'
+  | 'UPLOAD_COMPLETION_OBJECT_MISSING'
+  | 'UPLOAD_COMPLETION_PARTS_INVALID'
+  | 'UPLOAD_INTEGRITY_MISMATCH';
 
 export class DirectUploadApplicationError extends Error {
   constructor(readonly code: DirectUploadApplicationErrorCode) {
@@ -78,6 +91,28 @@ export interface IssueMultipartPartCapabilityInput {
   readonly correlationId: string;
   readonly partNumber: number;
   readonly tenantId: string;
+  readonly uploadSessionId: string;
+}
+
+export interface MultipartCompletionReceipt {
+  readonly checksumValue: string;
+  readonly etag: string;
+  readonly partNumber: number;
+}
+
+export interface CompleteDirectUploadInput {
+  readonly actor: ActorIdentity;
+  readonly causationId: string;
+  readonly correlationId: string;
+  readonly idempotencyKey: string;
+  readonly parts?: readonly MultipartCompletionReceipt[];
+  readonly tenantId: string;
+  readonly uploadSessionId: string;
+}
+
+export interface CompleteDirectUploadResult {
+  readonly documentId: string;
+  readonly executionId: string;
   readonly uploadSessionId: string;
 }
 
@@ -207,6 +242,51 @@ export class DirectUploadService {
     });
   }
 
+  async complete(
+    input: CompleteDirectUploadInput,
+  ): Promise<CompleteDirectUploadResult> {
+    const session = await this.sessions.findById(
+      input.tenantId,
+      input.uploadSessionId,
+    );
+    if (session === undefined) {
+      throw new DirectUploadApplicationError('UPLOAD_SESSION_NOT_FOUND');
+    }
+    if (
+      session.status === 'COMPLETED' &&
+      session.documentId !== undefined &&
+      session.executionId !== undefined
+    ) {
+      return {
+        documentId: session.documentId,
+        executionId: session.executionId,
+        uploadSessionId: session.id,
+      };
+    }
+    this.capabilityLifetime(session);
+
+    const metadata =
+      session.plan.type === 'SINGLE_PUT'
+        ? await this.inspectSingleUpload(session, input.parts)
+        : await this.completeOrReconcileMultipart(session, input.parts);
+    const committed = await this.sessions.commitCompletion({
+      actor: input.actor,
+      causationId: input.causationId,
+      correlationId: input.correlationId,
+      documentId: this.generateId(),
+      executionId: this.generateId(),
+      idempotencyKey: input.idempotencyKey,
+      metadata,
+      tenantId: session.tenantId,
+      uploadSessionId: session.id,
+    });
+    return {
+      documentId: committed.documentId,
+      executionId: committed.executionId,
+      uploadSessionId: committed.session.id,
+    };
+  }
+
   private capabilityLifetime(session: UploadSessionRecord): number {
     const remainingSeconds = Math.floor(
       (session.expiresAt.getTime() - this.clock().getTime()) / 1_000,
@@ -218,6 +298,139 @@ export class DirectUploadService {
       throw new DirectUploadApplicationError('UPLOAD_SESSION_EXPIRED');
     }
     return Math.min(remainingSeconds, this.policy.capabilityLifetimeSeconds);
+  }
+
+  private async inspectSingleUpload(
+    session: UploadSessionRecord,
+    receipts: readonly MultipartCompletionReceipt[] | undefined,
+  ) {
+    if (receipts !== undefined && receipts.length > 0) {
+      throw new DirectUploadApplicationError('UPLOAD_COMPLETION_PARTS_INVALID');
+    }
+    const metadata = await this.storage.inspectUpload({
+      storageObjectId: session.storageObjectId,
+      tenantId: session.tenantId,
+    });
+    if (metadata === undefined) {
+      throw new DirectUploadApplicationError(
+        'UPLOAD_COMPLETION_OBJECT_MISSING',
+      );
+    }
+    this.verifyMetadata(session, metadata, {
+      algorithm: 'SHA256',
+      type: 'FULL_OBJECT',
+      value: session.clientChecksum.value,
+    });
+    return metadata;
+  }
+
+  private async completeOrReconcileMultipart(
+    session: UploadSessionRecord,
+    receipts: readonly MultipartCompletionReceipt[] | undefined,
+  ) {
+    const uploadReference = session.multipartUploadReference;
+    if (uploadReference === undefined) {
+      throw new DirectUploadApplicationError(
+        'UPLOAD_SESSION_MULTIPART_NOT_READY',
+      );
+    }
+    const pinned = await this.sessions.findParts(session.tenantId, session.id);
+    const parts = this.validateMultipartReceipts(session, pinned, receipts);
+    const expectedChecksum = {
+      algorithm: 'SHA256' as const,
+      type: 'COMPOSITE' as const,
+      value: compositeSha256Checksum(pinned.map((part) => part.checksum.value)),
+    };
+    let metadata = await this.storage.inspectUpload({
+      storageObjectId: session.storageObjectId,
+      tenantId: session.tenantId,
+    });
+    if (metadata === undefined) {
+      try {
+        const completed = await this.storage.completeMultipartUpload({
+          parts,
+          sizeBytes: session.sizeBytes,
+          storageObjectId: session.storageObjectId,
+          tenantId: session.tenantId,
+          uploadReference,
+        });
+        metadata = await this.storage.inspectUpload({
+          storageObjectId: session.storageObjectId,
+          tenantId: session.tenantId,
+          versionId: completed.versionId,
+        });
+      } catch (error) {
+        metadata = await this.storage.inspectUpload({
+          storageObjectId: session.storageObjectId,
+          tenantId: session.tenantId,
+        });
+        if (metadata === undefined) {
+          throw error;
+        }
+      }
+    }
+    if (metadata === undefined) {
+      throw new DirectUploadApplicationError(
+        'UPLOAD_COMPLETION_OBJECT_MISSING',
+      );
+    }
+    this.verifyMetadata(session, metadata, expectedChecksum);
+    return metadata;
+  }
+
+  private validateMultipartReceipts(
+    session: UploadSessionRecord,
+    pinned: readonly UploadSessionPartRecord[],
+    receipts: readonly MultipartCompletionReceipt[] | undefined,
+  ): readonly MultipartPartReceipt[] {
+    if (
+      session.plan.type !== 'MULTIPART' ||
+      receipts === undefined ||
+      pinned.length !== session.plan.partCount ||
+      receipts.length !== pinned.length
+    ) {
+      throw new DirectUploadApplicationError('UPLOAD_COMPLETION_PARTS_INVALID');
+    }
+    return pinned.map((part, index) => {
+      const receipt = receipts[index];
+      if (
+        receipt === undefined ||
+        part.partNumber !== index + 1 ||
+        receipt.partNumber !== part.partNumber ||
+        receipt.checksumValue !== part.checksum.value ||
+        receipt.etag.trim().length === 0 ||
+        receipt.etag.length > 1_024
+      ) {
+        throw new DirectUploadApplicationError(
+          'UPLOAD_COMPLETION_PARTS_INVALID',
+        );
+      }
+      return {
+        checksumValue: part.checksum.value,
+        etag: receipt.etag,
+        partNumber: part.partNumber,
+      };
+    });
+  }
+
+  private verifyMetadata(
+    session: UploadSessionRecord,
+    metadata: StoredObjectMetadata,
+    expectedChecksum: {
+      readonly algorithm: 'SHA256';
+      readonly type: 'COMPOSITE' | 'FULL_OBJECT';
+      readonly value: string;
+    },
+  ): void {
+    if (
+      metadata.sizeBytes !== session.sizeBytes ||
+      metadata.contentType !== session.contentType ||
+      metadata.checksum.algorithm !== expectedChecksum.algorithm ||
+      metadata.checksum.type !== expectedChecksum.type ||
+      metadata.checksum.value !== expectedChecksum.value
+    ) {
+      throw new DirectUploadApplicationError('UPLOAD_INTEGRITY_MISMATCH');
+    }
   }
 
   private async ensureMultipartUpload(

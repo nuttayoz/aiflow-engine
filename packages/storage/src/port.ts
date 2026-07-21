@@ -92,6 +92,9 @@ export interface DirectUploadStoragePort {
   createSinglePutCapability(
     input: CreateSinglePutCapabilityInput,
   ): Promise<UploadCapability>;
+  inspectUpload(
+    input: DirectUploadObjectTarget & { readonly versionId?: string },
+  ): Promise<StoredObjectMetadata | undefined>;
 }
 
 export interface ObjectStoragePort {

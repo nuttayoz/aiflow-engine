@@ -12,7 +12,10 @@ import {
   loadDatabaseRuntimeConfig,
   type DatabaseRuntimeConfig,
 } from '@aiflow/config';
-import type { CreateUploadSessionInput } from '@aiflow/storage';
+import {
+  buildStorageObjectKey,
+  type CreateUploadSessionInput,
+} from '@aiflow/storage';
 import type { ValidatedWorkflowDefinition } from '@aiflow/workflows';
 
 import { createApplicationDataSource } from './data-source';
@@ -341,6 +344,249 @@ describe('PostgreSQL upload sessions', () => {
     expect(storage).toEqual({
       failure_code: 'UPLOAD_SESSION_ABORTED',
       status: 'ABANDONED',
+    });
+  });
+
+  it('atomically stages one verified upload and returns the durable result on retry', async () => {
+    const tenantId = 'upload-tenant-c';
+    const projectId = 'upload-project-c';
+    const { workflowId } = await activateWorkflow(tenantId, projectId);
+    const sessions = new PostgresUploadSessionRepository(
+      runtimeDataSource,
+      runtimeConfig.schema,
+    );
+    const input = createInput(tenantId, projectId, workflowId);
+    const created = await sessions.create(input);
+    const documentId = randomUUID();
+    const executionId = randomUUID();
+    const idempotencyKey = randomUUID();
+    const completion = {
+      actor: input.actor,
+      causationId: randomUUID(),
+      correlationId: randomUUID(),
+      documentId,
+      executionId,
+      idempotencyKey,
+      metadata: {
+        checksum: {
+          algorithm: 'SHA256' as const,
+          type: 'FULL_OBJECT' as const,
+          value: input.clientChecksumValue,
+        },
+        contentType: input.contentType,
+        encryptionMode: 'AES256',
+        key: buildStorageObjectKey(tenantId, input.storageObjectId),
+        sizeBytes: input.sizeBytes,
+        versionId: 'source-version-1',
+      },
+      tenantId,
+      uploadSessionId: created.id,
+    };
+
+    const completed = await sessions.commitCompletion(completion);
+    expect(completed).toMatchObject({
+      documentId,
+      executionId,
+      session: { stateVersion: 1, status: 'COMPLETED' },
+    });
+    await expect(
+      sessions.commitCompletion({
+        ...completion,
+        documentId: randomUUID(),
+        executionId: randomUUID(),
+      }),
+    ).resolves.toMatchObject({ documentId, executionId });
+
+    const [storage] = (await runtimeDataSource.query(
+      `
+        SELECT checksum_type, checksum_value, status, version_id
+        FROM aiflow.storage_objects
+        WHERE tenant_id = $1 AND id = $2
+      `,
+      [tenantId, input.storageObjectId],
+    )) as {
+      checksum_type: string;
+      checksum_value: string;
+      status: string;
+      version_id: string;
+    }[];
+    expect(storage).toEqual({
+      checksum_type: 'FULL_OBJECT',
+      checksum_value: input.clientChecksumValue,
+      status: 'AVAILABLE',
+      version_id: completion.metadata.versionId,
+    });
+
+    const documents = (await runtimeDataSource.query(
+      `
+        SELECT id, source_identity, source_storage_object_id, source_version
+        FROM aiflow.documents
+        WHERE tenant_id = $1 AND id = $2
+      `,
+      [tenantId, documentId],
+    )) as {
+      id: string;
+      source_identity: string;
+      source_storage_object_id: string;
+      source_version: string;
+    }[];
+    expect(documents).toEqual([
+      {
+        id: documentId,
+        source_identity: created.id,
+        source_storage_object_id: input.storageObjectId,
+        source_version: completion.metadata.versionId,
+      },
+    ]);
+
+    const executions = (await runtimeDataSource.query(
+      `
+        SELECT current_stage, document_id, id, status
+        FROM aiflow.executions
+        WHERE tenant_id = $1 AND id = $2
+      `,
+      [tenantId, executionId],
+    )) as {
+      current_stage: string;
+      document_id: string;
+      id: string;
+      status: string;
+    }[];
+    expect(executions).toEqual([
+      {
+        current_stage: 'EXTRACT',
+        document_id: documentId,
+        id: executionId,
+        status: 'QUEUED',
+      },
+    ]);
+
+    const stages = (await runtimeDataSource.query(
+      `
+        SELECT stage, status
+        FROM aiflow.execution_stages
+        WHERE tenant_id = $1 AND execution_id = $2
+        ORDER BY stage
+      `,
+      [tenantId, executionId],
+    )) as { stage: string; status: string }[];
+    expect(stages).toEqual([
+      { stage: 'DELIVER', status: 'PENDING' },
+      { stage: 'EXTRACT', status: 'PENDING' },
+      { stage: 'MAP', status: 'PENDING' },
+      { stage: 'REVIEW', status: 'SKIPPED' },
+    ]);
+
+    const [effects] = (await runtimeDataSource.query(
+      `
+        SELECT
+          (SELECT count(*)::int FROM aiflow.documents
+            WHERE tenant_id = $1 AND source_identity = $2) AS document_count,
+          (SELECT count(*)::int FROM aiflow.executions
+            WHERE tenant_id = $1 AND document_id = $3) AS execution_count,
+          (SELECT count(*)::int FROM aiflow.outbox_messages
+            WHERE tenant_id = $1 AND aggregate_id = $4::text) AS outbox_count,
+          (SELECT count(*)::int FROM aiflow.audit_events
+            WHERE tenant_id = $1
+              AND resource_id IN ($2::text, $4::text)
+              AND action IN ('upload-session.completed', 'execution.create')) AS audit_count
+      `,
+      [tenantId, created.id, documentId, executionId],
+    )) as {
+      audit_count: number;
+      document_count: number;
+      execution_count: number;
+      outbox_count: number;
+    }[];
+    expect(effects).toEqual({
+      audit_count: 2,
+      document_count: 1,
+      execution_count: 1,
+      outbox_count: 1,
+    });
+  });
+
+  it('rolls back every staging effect when the workflow stops accepting documents', async () => {
+    const tenantId = 'upload-tenant-d';
+    const projectId = 'upload-project-d';
+    const { workflowId } = await activateWorkflow(tenantId, projectId);
+    const sessions = new PostgresUploadSessionRepository(
+      runtimeDataSource,
+      runtimeConfig.schema,
+    );
+    const input = createInput(tenantId, projectId, workflowId);
+    const created = await sessions.create(input);
+    await runtimeDataSource.query(
+      `
+        UPDATE aiflow.workflows
+        SET active_version_id = NULL,
+            accepting_new_documents = false,
+            status = 'INACTIVE'
+        WHERE tenant_id = $1 AND id = $2
+      `,
+      [tenantId, workflowId],
+    );
+    const documentId = randomUUID();
+    const executionId = randomUUID();
+
+    await expect(
+      sessions.commitCompletion({
+        actor: input.actor,
+        causationId: randomUUID(),
+        correlationId: randomUUID(),
+        documentId,
+        executionId,
+        idempotencyKey: randomUUID(),
+        metadata: {
+          checksum: {
+            algorithm: 'SHA256',
+            type: 'FULL_OBJECT',
+            value: input.clientChecksumValue,
+          },
+          contentType: input.contentType,
+          encryptionMode: 'AES256',
+          key: buildStorageObjectKey(tenantId, input.storageObjectId),
+          sizeBytes: input.sizeBytes,
+          versionId: 'source-version-cutover',
+        },
+        tenantId,
+        uploadSessionId: created.id,
+      }),
+    ).rejects.toThrow('WORKFLOW_NOT_ACCEPTING_DOCUMENTS');
+
+    const [state] = (await runtimeDataSource.query(
+      `
+        SELECT
+          (SELECT status FROM aiflow.upload_sessions
+            WHERE tenant_id = $1 AND id = $2) AS session_status,
+          (SELECT status FROM aiflow.storage_objects
+            WHERE tenant_id = $1 AND id = $3) AS storage_status,
+          (SELECT count(*)::int FROM aiflow.documents
+            WHERE tenant_id = $1 AND id = $4) AS document_count,
+          (SELECT count(*)::int FROM aiflow.executions
+            WHERE tenant_id = $1 AND id = $5) AS execution_count,
+          (SELECT count(*)::int FROM aiflow.outbox_messages
+            WHERE tenant_id = $1 AND aggregate_id = $5::text) AS outbox_count,
+          (SELECT count(*)::int FROM aiflow.idempotency_records
+            WHERE tenant_id = $1
+              AND operation_scope = 'upload-session.complete') AS completion_key_count
+      `,
+      [tenantId, created.id, input.storageObjectId, documentId, executionId],
+    )) as {
+      completion_key_count: number;
+      document_count: number;
+      execution_count: number;
+      outbox_count: number;
+      session_status: string;
+      storage_status: string;
+    }[];
+    expect(state).toEqual({
+      completion_key_count: 0,
+      document_count: 0,
+      execution_count: 0,
+      outbox_count: 0,
+      session_status: 'ACTIVE',
+      storage_status: 'RESERVED',
     });
   });
 });

@@ -1,4 +1,5 @@
 import {
+  compositeSha256Checksum,
   createUploadSessionPart,
   expectedMultipartPartSize,
   reconcileUploadSessionPart,
@@ -59,6 +60,13 @@ describe('upload session parts', () => {
         },
       }),
     ).toThrow(new UploadSessionPartError('UPLOAD_PART_CONFLICT'));
+  });
+
+  it('calculates the S3 composite checksum from binary part digests', () => {
+    const second = Buffer.alloc(32, 6).toString('base64');
+    expect(compositeSha256Checksum([checksum, second])).toMatch(
+      /^[A-Za-z0-9+/]{43}=-2$/u,
+    );
   });
 
   it('rejects invalid numbers, sizes, checksums, lifecycle, and readiness', () => {

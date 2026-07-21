@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 import type { UploadSessionRecord } from './upload-session';
 
 export interface UploadSessionPartRecord {
@@ -31,6 +33,22 @@ export class UploadSessionPartError extends Error {
 const isCanonicalSha256 = (value: string): boolean => {
   const decoded = Buffer.from(value, 'base64');
   return decoded.length === 32 && decoded.toString('base64') === value;
+};
+
+export const compositeSha256Checksum = (
+  checksumValues: readonly string[],
+): string => {
+  if (
+    checksumValues.length < 2 ||
+    checksumValues.some((value) => !isCanonicalSha256(value))
+  ) {
+    throw new UploadSessionPartError('UPLOAD_PART_CHECKSUM_INVALID');
+  }
+  const hash = createHash('sha256');
+  for (const value of checksumValues) {
+    hash.update(Buffer.from(value, 'base64'));
+  }
+  return `${hash.digest('base64')}-${checksumValues.length.toString()}`;
 };
 
 export const expectedMultipartPartSize = (

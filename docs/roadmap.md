@@ -196,6 +196,9 @@ Implemented:
   reconciliation that never exposes the storage upload reference.
 - Immutable multipart-part checksum/size pinning with exact final-part sizing,
   idempotent capability refresh, tenant isolation, and changed-file rejection.
+- Verified single/multipart completion with exact S3 metadata, lost-response
+  reconciliation, and one atomic document, execution, stage, outbox,
+  idempotency, and audit commit guarded by the pinned workflow version.
 
 Scope:
 

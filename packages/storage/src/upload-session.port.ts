@@ -1,5 +1,6 @@
 import type { ActorIdentity } from '@aiflow/core';
 
+import type { StoredObjectMetadata } from './types';
 import type { UploadPlan, UploadSessionRecord } from './upload-session';
 import type { UploadSessionPartRecord } from './upload-session-part';
 
@@ -47,6 +48,24 @@ export interface PinUploadSessionPartResult {
   readonly session: UploadSessionRecord;
 }
 
+export interface CommitUploadSessionInput {
+  readonly actor: ActorIdentity;
+  readonly causationId: string;
+  readonly correlationId: string;
+  readonly documentId: string;
+  readonly executionId: string;
+  readonly idempotencyKey: string;
+  readonly metadata: StoredObjectMetadata;
+  readonly tenantId: string;
+  readonly uploadSessionId: string;
+}
+
+export interface CommitUploadSessionResult {
+  readonly documentId: string;
+  readonly executionId: string;
+  readonly session: UploadSessionRecord;
+}
+
 export interface UploadSessionRepository {
   abort(input: UploadSessionMutationInput): Promise<UploadSessionRecord>;
   attachMultipartUpload(
@@ -60,6 +79,13 @@ export interface UploadSessionRepository {
     tenantId: string,
     uploadSessionId: string,
   ): Promise<UploadSessionRecord | undefined>;
+  findParts(
+    tenantId: string,
+    uploadSessionId: string,
+  ): Promise<readonly UploadSessionPartRecord[]>;
+  commitCompletion(
+    input: CommitUploadSessionInput,
+  ): Promise<CommitUploadSessionResult>;
   pinPart(
     input: PinUploadSessionPartInput,
   ): Promise<PinUploadSessionPartResult>;
