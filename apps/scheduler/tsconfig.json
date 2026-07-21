@@ -11,6 +11,7 @@
     { "path": "../../packages/config" },
     { "path": "../../packages/core" },
     { "path": "../../packages/database" },
+    { "path": "../../packages/messaging" },
     { "path": "../../packages/observability" }
   ]
 }

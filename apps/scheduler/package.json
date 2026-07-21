@@ -7,6 +7,7 @@
     "@aiflow/config": "workspace:*",
     "@aiflow/core": "workspace:*",
     "@aiflow/database": "workspace:*",
+    "@aiflow/messaging": "workspace:*",
     "@aiflow/observability": "workspace:*",
     "@nestjs/common": "11.1.28",
     "@nestjs/core": "11.1.28",
