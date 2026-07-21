@@ -11,12 +11,16 @@
   "references": [
     { "path": "../../packages/config" },
     { "path": "../../packages/connectors/direct-upload" },
+    { "path": "../../packages/connectors/microsoft-business-central" },
     { "path": "../../packages/connectors/phase1-synthetic" },
     { "path": "../../packages/connector-sdk" },
     { "path": "../../packages/core" },
     { "path": "../../packages/database" },
+    { "path": "../../packages/extraction" },
+    { "path": "../../packages/mappings" },
     { "path": "../../packages/messaging" },
     { "path": "../../packages/observability" },
+    { "path": "../../packages/storage" },
     { "path": "../../packages/workflows" }
   ]
 }

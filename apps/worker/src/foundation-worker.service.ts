@@ -4,14 +4,22 @@ import {
   Inject,
   Injectable,
   type OnApplicationBootstrap,
+  type OnApplicationShutdown,
 } from '@nestjs/common';
 
+import {
+  BusinessCentralDeliveryProcessor,
+  FakeBusinessCentralDestination,
+  isPurchaseInvoiceDraftInput,
+  microsoftBusinessCentralConnector,
+} from '@aiflow/connector-microsoft-business-central';
 import { directUploadConnector } from '@aiflow/connector-direct-upload';
 import { phase1SyntheticConnector } from '@aiflow/connector-phase1-synthetic';
 import { ConnectorRegistry } from '@aiflow/connector-sdk';
 import {
   DatabaseService,
   PostgresExecutionRepository,
+  PostgresPipelineRepository,
   PostgresWorkflowProvisioningRepository,
   PostgresWorkflowRepository,
 } from '@aiflow/database';
@@ -22,15 +30,30 @@ import {
   type MessageHandlingOutcome,
   type RabbitMqClient,
 } from '@aiflow/messaging';
+import {
+  ExtractionProcessor,
+  FakeExtractionProvider,
+  InMemoryExtractionProfileCatalog,
+  PHASE2_INVOICE_PROFILE,
+} from '@aiflow/extraction';
+import { MappingProcessor } from '@aiflow/mappings';
 import { WorkflowProvisioningService } from '@aiflow/workflows';
 import { RuntimeTelemetry } from '@aiflow/observability';
+import { S3ObjectStorage } from '@aiflow/storage';
+import type { S3RuntimeConfig } from '@aiflow/config';
 
-import { SYNTHETIC_STAGES_ENABLED, WORKER_QUEUE_NAMES } from './worker.tokens';
+import {
+  SYNTHETIC_STAGES_ENABLED,
+  WORKER_QUEUE_NAMES,
+  WORKER_S3_CONFIG,
+} from './worker.tokens';
 
 const MESSAGE_TYPES = [
   'aiflow.workflow.provisioning.requested.v1',
   'aiflow.execution.stage.extract.requested.v1',
   'aiflow.execution.stage.map.requested.v1',
+  'aiflow.execution.stage.reconcile.requested.v1',
+  'aiflow.execution.stage.deliver.connector.microsoft-business-central.requested.v1',
   'aiflow.execution.stage.deliver.connector.phase1-synthetic.requested.v1',
 ] as const;
 
@@ -47,12 +70,17 @@ interface StageData extends Readonly<Record<string, unknown>> {
 
 @Injectable()
 export class FoundationWorkerService
-  implements MessageHandler, OnApplicationBootstrap
+  implements MessageHandler, OnApplicationBootstrap, OnApplicationShutdown
 {
   readonly messageTypes = MESSAGE_TYPES;
   private readonly consumerName = `phase1-worker:${randomUUID()}`;
   private executions?: PostgresExecutionRepository;
+  private extraction?: ExtractionProcessor;
+  private mapping?: MappingProcessor;
+  private pipeline?: PostgresPipelineRepository;
   private provisioning?: WorkflowProvisioningService;
+  private delivery?: BusinessCentralDeliveryProcessor;
+  private storage?: S3ObjectStorage;
 
   constructor(
     @Inject(DatabaseService)
@@ -61,6 +89,7 @@ export class FoundationWorkerService
     @Inject(WORKER_QUEUE_NAMES) private readonly queueNames: readonly string[],
     @Inject(SYNTHETIC_STAGES_ENABLED)
     private readonly syntheticStagesEnabled: boolean,
+    @Inject(WORKER_S3_CONFIG) private readonly s3Config: S3RuntimeConfig,
     @Inject(RuntimeTelemetry) private readonly telemetry: RuntimeTelemetry,
   ) {}
 
@@ -74,18 +103,62 @@ export class FoundationWorkerService
       this.database.dataSource,
       schema,
     );
+    this.pipeline = new PostgresPipelineRepository(
+      this.database.dataSource,
+      schema,
+    );
+    this.storage = new S3ObjectStorage(this.s3Config);
+    const profiles = new InMemoryExtractionProfileCatalog([
+      PHASE2_INVOICE_PROFILE,
+    ]);
+    const extractionProvider = new FakeExtractionProvider();
+    const businessCentral = new FakeBusinessCentralDestination();
+    this.extraction = new ExtractionProcessor(
+      this.pipeline,
+      this.executions,
+      this.storage,
+      extractionProvider,
+      profiles,
+    );
+    this.mapping = new MappingProcessor(
+      this.pipeline,
+      this.executions,
+      this.storage,
+      {
+        validate: ({ actionId, connectorId, payload }) => ({
+          actionVersion: 1,
+          valid:
+            connectorId === 'microsoft-business-central' &&
+            actionId === 'create-purchase-invoice-draft' &&
+            isPurchaseInvoiceDraftInput(payload),
+        }),
+      },
+    );
+    this.delivery = new BusinessCentralDeliveryProcessor(
+      this.pipeline,
+      this.storage,
+      businessCentral,
+    );
     this.provisioning = new WorkflowProvisioningService(
       new PostgresWorkflowProvisioningRepository(
         this.database.dataSource,
         schema,
       ),
       workflows,
-      new ConnectorRegistry([directUploadConnector, phase1SyntheticConnector]),
+      new ConnectorRegistry([
+        directUploadConnector,
+        microsoftBusinessCentralConnector,
+        phase1SyntheticConnector,
+      ]),
     );
 
     await Promise.all(
       this.queueNames.map((queueName) => this.rabbitMq.start(queueName, this)),
     );
+  }
+
+  onApplicationShutdown(): void {
+    this.storage?.close();
   }
 
   async handle(envelope: MessageEnvelope): Promise<MessageHandlingOutcome> {
@@ -95,7 +168,11 @@ export class FoundationWorkerService
           ? await this.handleProvisioning(
               envelope as MessageEnvelope<ProvisioningData>,
             )
-          : await this.handleSyntheticStage(envelope);
+          : envelope.type === 'aiflow.execution.stage.reconcile.requested.v1'
+            ? await this.handleReconciliation(
+                envelope as MessageEnvelope<StageData>,
+              )
+            : await this.handleStage(envelope as MessageEnvelope<StageData>);
       this.telemetry.recordMessage(envelope.type, outcome);
       return outcome;
     } catch (error) {
@@ -103,15 +180,6 @@ export class FoundationWorkerService
       this.telemetry.captureException(error, 'message.handle');
       throw error;
     }
-  }
-
-  private async handleSyntheticStage(
-    envelope: MessageEnvelope,
-  ): Promise<MessageHandlingOutcome> {
-    if (!this.syntheticStagesEnabled) {
-      throw new Error('SYNTHETIC_STAGE_MODE_DISABLED');
-    }
-    return this.handleStage(envelope as MessageEnvelope<StageData>);
   }
 
   private async handleProvisioning(
@@ -135,7 +203,8 @@ export class FoundationWorkerService
     envelope: MessageEnvelope<StageData>,
   ): Promise<MessageHandlingOutcome> {
     const executions = this.executions;
-    if (executions === undefined) {
+    const pipeline = this.pipeline;
+    if (executions === undefined || pipeline === undefined) {
       throw new Error('WORKER_NOT_READY');
     }
     const claimed = await executions.claimStage({
@@ -153,14 +222,72 @@ export class FoundationWorkerService
     if (claimed === undefined) {
       return 'STALE';
     }
-    await executions.completeStage({
+    const connectorId = await pipeline.findDestinationConnectorId(
+      envelope.tenantId,
+      envelope.data.executionId,
+    );
+    if (connectorId === 'phase1-synthetic') {
+      if (!this.syntheticStagesEnabled) {
+        throw new Error('SYNTHETIC_STAGE_MODE_DISABLED');
+      }
+      await executions.completeStage({
+        causationId: envelope.messageId,
+        executionId: claimed.execution.executionId,
+        expectedStateVersion: claimed.execution.stateVersion,
+        leaseOwner: this.consumerName,
+        stage: envelope.data.stage,
+        tenantId: envelope.tenantId,
+      });
+      return 'CLAIMED';
+    }
+    if (!this.syntheticStagesEnabled) {
+      throw new Error('PHASE2_EXTERNAL_ADAPTER_NOT_CONFIGURED');
+    }
+    if (envelope.data.stage === 'EXTRACT') {
+      await this.requireExtraction().process(claimed, envelope.messageId);
+    } else if (envelope.data.stage === 'MAP') {
+      await this.requireMapping().process(claimed, envelope.messageId);
+    } else if (envelope.data.stage === 'DELIVER') {
+      await this.requireDelivery().process(claimed, envelope.messageId);
+    } else {
+      throw new Error('WORKER_STAGE_UNSUPPORTED');
+    }
+    return 'CLAIMED';
+  }
+
+  private async handleReconciliation(
+    envelope: MessageEnvelope<StageData>,
+  ): Promise<MessageHandlingOutcome> {
+    if (!this.syntheticStagesEnabled) {
+      throw new Error('PHASE2_EXTERNAL_ADAPTER_NOT_CONFIGURED');
+    }
+    await this.requireDelivery().reconcile({
       causationId: envelope.messageId,
-      executionId: claimed.execution.executionId,
-      expectedStateVersion: claimed.execution.stateVersion,
-      leaseOwner: this.consumerName,
-      stage: envelope.data.stage,
+      executionId: envelope.data.executionId,
+      expectedStateVersion: envelope.data.expectedStateVersion,
       tenantId: envelope.tenantId,
     });
     return 'CLAIMED';
+  }
+
+  private requireDelivery(): BusinessCentralDeliveryProcessor {
+    if (this.delivery === undefined) {
+      throw new Error('WORKER_NOT_READY');
+    }
+    return this.delivery;
+  }
+
+  private requireExtraction(): ExtractionProcessor {
+    if (this.extraction === undefined) {
+      throw new Error('WORKER_NOT_READY');
+    }
+    return this.extraction;
+  }
+
+  private requireMapping(): MappingProcessor {
+    if (this.mapping === undefined) {
+      throw new Error('WORKER_NOT_READY');
+    }
+    return this.mapping;
   }
 }

@@ -7,6 +7,7 @@ import {
   loadObservabilityRuntimeConfig,
   loadRabbitMqRuntimeConfig,
   loadRuntimeConfig,
+  loadS3RuntimeConfig,
 } from '@aiflow/config';
 import { waitForTerminationSignal } from '@aiflow/core';
 import {
@@ -30,6 +31,7 @@ const bootstrap = async (): Promise<void> => {
   const runtimeConfig = loadRuntimeConfig('worker');
   const databaseConfig = loadDatabaseRuntimeConfig();
   const rabbitMqConfig = loadRabbitMqRuntimeConfig();
+  const s3Config = loadS3RuntimeConfig();
   telemetry = new RuntimeTelemetry(
     loadObservabilityRuntimeConfig('worker'),
     runtimeConfig.environment,
@@ -48,6 +50,7 @@ const bootstrap = async (): Promise<void> => {
       database: databaseConfig,
       queueNames: queues,
       rabbitMq: rabbitMqConfig,
+      s3: s3Config,
       syntheticStagesEnabled: runtimeConfig.environment !== 'production',
       telemetry,
     }),

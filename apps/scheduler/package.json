@@ -9,6 +9,7 @@
     "@aiflow/database": "workspace:*",
     "@aiflow/messaging": "workspace:*",
     "@aiflow/observability": "workspace:*",
+    "@aiflow/storage": "workspace:*",
     "@nestjs/common": "11.1.28",
     "@nestjs/core": "11.1.28",
     "reflect-metadata": "0.2.2",
