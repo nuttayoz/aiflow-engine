@@ -7,6 +7,7 @@ import {
   loadDatabaseRuntimeConfig,
   loadObservabilityRuntimeConfig,
   loadRuntimeConfig,
+  loadS3RuntimeConfig,
 } from '@aiflow/config';
 import { RequestContextStore } from '@aiflow/core';
 import {
@@ -17,6 +18,8 @@ import {
 } from '@aiflow/observability';
 
 import { ApiModule } from './api.module';
+import { createDemoAuthMiddleware } from './api-auth';
+import { ApiErrorFilter } from './api-error.filter';
 import { createRequestContextMiddleware } from './request-context.middleware';
 
 let logger = createStructuredLogger({
@@ -30,6 +33,7 @@ const bootstrap = async (): Promise<void> => {
   const runtimeConfig = loadRuntimeConfig('api');
   const apiConfig = loadApiRuntimeConfig();
   const databaseConfig = loadDatabaseRuntimeConfig();
+  const s3Config = loadS3RuntimeConfig();
   telemetry = new RuntimeTelemetry(
     loadObservabilityRuntimeConfig('api'),
     runtimeConfig.environment,
@@ -45,11 +49,25 @@ const bootstrap = async (): Promise<void> => {
   });
 
   const app = await NestFactory.create(
-    ApiModule.register(databaseConfig, telemetry),
-    { logger: new NestStructuredLogger(logger) },
+    ApiModule.register(databaseConfig, s3Config, telemetry),
+    { logger: new NestStructuredLogger(logger), rawBody: true },
   );
 
+  if (runtimeConfig.environment !== 'production') {
+    app.enableCors({
+      allowedHeaders: [
+        'Authorization',
+        'Content-Type',
+        'Idempotency-Key',
+        'X-Correlation-ID',
+      ],
+      methods: ['DELETE', 'GET', 'OPTIONS', 'POST', 'PUT'],
+      origin: 'http://localhost:4173',
+    });
+  }
   app.use(createRequestContextMiddleware(contextStore, logger));
+  app.use(createDemoAuthMiddleware(runtimeConfig.environment));
+  app.useGlobalFilters(new ApiErrorFilter());
   app.enableShutdownHooks();
   await app.listen(apiConfig.port, apiConfig.host);
 

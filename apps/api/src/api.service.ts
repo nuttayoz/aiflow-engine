@@ -1,0 +1,552 @@
+import { createHash } from 'node:crypto';
+
+import {
+  Inject,
+  Injectable,
+  type OnApplicationBootstrap,
+  type OnApplicationShutdown,
+} from '@nestjs/common';
+
+import { microsoftBusinessCentralConnector } from '@aiflow/connector-microsoft-business-central';
+import { directUploadConnector } from '@aiflow/connector-direct-upload';
+import { ConnectorRegistry } from '@aiflow/connector-sdk';
+import type { S3RuntimeConfig } from '@aiflow/config';
+import {
+  DatabaseService,
+  PostgresExecutionRepository,
+  PostgresPipelineRepository,
+  PostgresUploadSessionRepository,
+  PostgresWorkflowProvisioningRepository,
+  PostgresWorkflowRepository,
+} from '@aiflow/database';
+import type { ExecutionRecord } from '@aiflow/executions';
+import {
+  InMemoryExtractionProfileCatalog,
+  PHASE2_INVOICE_PROFILE,
+  verifyExtractionCallback,
+} from '@aiflow/extraction';
+import {
+  DirectUploadService,
+  type MultipartCompletionReceipt,
+  S3ObjectStorage,
+} from '@aiflow/storage';
+import {
+  WorkflowDefinitionValidator,
+  type WorkflowDefinitionV1,
+  type WorkflowRecord,
+} from '@aiflow/workflows';
+
+import type { ApiAuthorization } from './api-auth';
+import { authorizeProject } from './api-auth';
+
+export const API_S3_CONFIG = Symbol('API_S3_CONFIG');
+
+const profiles = new InMemoryExtractionProfileCatalog([PHASE2_INVOICE_PROFILE]);
+
+const uuidFrom = (scope: string, tenantId: string, key: string): string => {
+  const hex = createHash('sha256')
+    .update(`${scope}\u0000${tenantId}\u0000${key}`)
+    .digest('hex');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-a${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
+};
+
+const requireIdempotencyKey = (value: string | undefined): string => {
+  const key = value?.trim();
+  if (key === undefined || key.length === 0 || key.length > 256) {
+    throw new Error('IDEMPOTENCY_KEY_INVALID');
+  }
+  return key;
+};
+
+const requireRecord = (
+  value: unknown,
+  code: string,
+): Record<string, unknown> => {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error(code);
+  }
+  return value as Record<string, unknown>;
+};
+
+const projectWorkflow = (
+  authorization: ApiAuthorization,
+  workflow: WorkflowRecord | undefined,
+): WorkflowRecord => {
+  if (workflow === undefined) throw new Error('WORKFLOW_NOT_FOUND');
+  authorizeProject(authorization, workflow.projectId);
+  return workflow;
+};
+
+const executionView = (execution: ExecutionRecord) => ({
+  allowedActions:
+    execution.status === 'FAILED' &&
+    ['EXTRACT', 'MAP'].includes(execution.currentStage)
+      ? ['RETRY']
+      : [],
+  completedAt: execution.completedAt,
+  correlationId: execution.correlationId,
+  createdAt: execution.createdAt,
+  currentStage: execution.currentStage,
+  documentId: execution.documentId,
+  executionId: execution.executionId,
+  failure: execution.failure ?? null,
+  retryOfExecutionId: execution.retryOfExecutionId,
+  stageSummary: ['EXTRACT', 'MAP', 'REVIEW', 'DELIVER'].map((stage) => {
+    const snapshot = execution.stages[stage as keyof typeof execution.stages];
+    return {
+      attempts: snapshot.attemptCount,
+      failure: snapshot.failure ?? null,
+      stage: snapshot.stage,
+      status: snapshot.status,
+    };
+  }),
+  stateVersion: execution.stateVersion,
+  status: execution.status,
+  transitionedAt: execution.transitionedAt,
+  workflowId: execution.workflowId,
+  workflowVersionId: execution.workflowVersionId,
+});
+
+@Injectable()
+export class ApiService
+  implements OnApplicationBootstrap, OnApplicationShutdown
+{
+  private executions?: PostgresExecutionRepository;
+  private pipeline?: PostgresPipelineRepository;
+  private provisioning?: PostgresWorkflowProvisioningRepository;
+  private sessions?: PostgresUploadSessionRepository;
+  private storage?: S3ObjectStorage;
+  private uploads?: DirectUploadService;
+  private workflows?: PostgresWorkflowRepository;
+  private readonly connectors = new ConnectorRegistry([
+    directUploadConnector,
+    microsoftBusinessCentralConnector,
+  ]);
+  private readonly validator = new WorkflowDefinitionValidator(
+    this.connectors,
+    profiles,
+  );
+
+  constructor(
+    @Inject(DatabaseService) private readonly database: DatabaseService,
+    @Inject(API_S3_CONFIG) private readonly s3Config: S3RuntimeConfig,
+  ) {}
+
+  onApplicationBootstrap(): void {
+    const { dataSource, schema } = this.database;
+    this.workflows = new PostgresWorkflowRepository(dataSource, schema);
+    this.provisioning = new PostgresWorkflowProvisioningRepository(
+      dataSource,
+      schema,
+    );
+    this.executions = new PostgresExecutionRepository(dataSource, schema);
+    this.pipeline = new PostgresPipelineRepository(dataSource, schema);
+    this.sessions = new PostgresUploadSessionRepository(dataSource, schema);
+    this.storage = new S3ObjectStorage(this.s3Config);
+    this.uploads = new DirectUploadService(this.sessions, this.storage);
+  }
+
+  onApplicationShutdown(): void {
+    this.storage?.close();
+  }
+
+  connectorCatalog(): readonly unknown[] {
+    return this.connectors.descriptors();
+  }
+
+  extractionProfileCatalog(): readonly unknown[] {
+    return profiles.list();
+  }
+
+  async createWorkflow(
+    authorization: ApiAuthorization,
+    projectId: string,
+    body: unknown,
+    rawIdempotencyKey: string | undefined,
+  ) {
+    authorizeProject(authorization, projectId);
+    const input = requireRecord(body, 'WORKFLOW_INPUT_INVALID');
+    if (typeof input.name !== 'string')
+      throw new Error('WORKFLOW_NAME_INVALID');
+    const validation = this.validator.validate(input.definition);
+    if (!validation.valid) {
+      throw new Error('WORKFLOW_CONFIGURATION_INVALID');
+    }
+    const idempotencyKey = requireIdempotencyKey(rawIdempotencyKey);
+    const workflowId = uuidFrom(
+      'workflow',
+      authorization.tenantId,
+      idempotencyKey,
+    );
+    const versionId = uuidFrom(
+      'workflow-version',
+      authorization.tenantId,
+      idempotencyKey,
+    );
+    const result = await this.requireWorkflows().create({
+      actor: authorization.actor,
+      causationId: idempotencyKey,
+      correlationId: authorization.correlationId,
+      definition: validation.value,
+      idempotencyKey,
+      name: input.name,
+      projectId,
+      tenantId: authorization.tenantId,
+      versionId,
+      workflowId,
+    });
+    return this.workflowView(result.workflow, result.version);
+  }
+
+  async listWorkflows(authorization: ApiAuthorization, projectId: string) {
+    authorizeProject(authorization, projectId);
+    const workflows = await this.requireWorkflows().listByProject(
+      authorization.tenantId,
+      projectId,
+    );
+    return Promise.all(
+      workflows.map(async (workflow) => {
+        const version = await this.requireWorkflows().findLatestVersion(
+          authorization.tenantId,
+          workflow.id,
+        );
+        return this.workflowView(workflow, version);
+      }),
+    );
+  }
+
+  async getWorkflow(authorization: ApiAuthorization, workflowId: string) {
+    const workflow = projectWorkflow(
+      authorization,
+      await this.requireWorkflows().findById(
+        authorization.tenantId,
+        workflowId,
+      ),
+    );
+    const version = await this.requireWorkflows().findLatestVersion(
+      authorization.tenantId,
+      workflow.id,
+    );
+    return this.workflowView(workflow, version);
+  }
+
+  async activateWorkflow(
+    authorization: ApiAuthorization,
+    workflowId: string,
+    body: unknown,
+    rawIdempotencyKey: string | undefined,
+  ) {
+    const workflow = projectWorkflow(
+      authorization,
+      await this.requireWorkflows().findById(
+        authorization.tenantId,
+        workflowId,
+      ),
+    );
+    const input = requireRecord(body, 'WORKFLOW_ACTIVATION_INPUT_INVALID');
+    if (typeof input.versionId !== 'string') {
+      throw new Error('WORKFLOW_VERSION_NOT_FOUND');
+    }
+    const idempotencyKey = requireIdempotencyKey(rawIdempotencyKey);
+    return this.requireProvisioning().requestActivation({
+      actor: authorization.actor,
+      causationId: idempotencyKey,
+      correlationId: authorization.correlationId,
+      idempotencyKey,
+      operationId: uuidFrom(
+        'workflow-activation',
+        authorization.tenantId,
+        idempotencyKey,
+      ),
+      projectId: workflow.projectId,
+      targetVersionId: input.versionId,
+      tenantId: authorization.tenantId,
+      workflowId,
+    });
+  }
+
+  async getOperation(authorization: ApiAuthorization, operationId: string) {
+    const operation = await this.requireProvisioning().findById(
+      authorization.tenantId,
+      operationId,
+    );
+    if (operation === undefined)
+      throw new Error('PROVISIONING_OPERATION_NOT_FOUND');
+    authorizeProject(authorization, operation.projectId);
+    return operation;
+  }
+
+  async createUpload(
+    authorization: ApiAuthorization,
+    workflowId: string,
+    body: unknown,
+    rawIdempotencyKey: string | undefined,
+  ) {
+    const workflow = projectWorkflow(
+      authorization,
+      await this.requireWorkflows().findById(
+        authorization.tenantId,
+        workflowId,
+      ),
+    );
+    const input = requireRecord(body, 'UPLOAD_SESSION_INPUT_INVALID');
+    const checksum = requireRecord(
+      input.checksum,
+      'UPLOAD_SESSION_CHECKSUM_INVALID',
+    );
+    if (
+      typeof input.originalFilename !== 'string' ||
+      typeof input.contentType !== 'string' ||
+      typeof input.sizeBytes !== 'number' ||
+      checksum.algorithm !== 'SHA256' ||
+      typeof checksum.value !== 'string'
+    ) {
+      throw new Error('UPLOAD_SESSION_INPUT_INVALID');
+    }
+    return this.requireUploads().create({
+      actor: authorization.actor,
+      causationId: authorization.correlationId,
+      clientChecksumValue: checksum.value,
+      contentType: input.contentType,
+      correlationId: authorization.correlationId,
+      idempotencyKey: requireIdempotencyKey(rawIdempotencyKey),
+      originalFilename: input.originalFilename,
+      projectId: workflow.projectId,
+      sizeBytes: input.sizeBytes,
+      tenantId: authorization.tenantId,
+      workflowId,
+    });
+  }
+
+  async issuePart(
+    authorization: ApiAuthorization,
+    uploadSessionId: string,
+    partNumber: number,
+    body: unknown,
+  ) {
+    await this.authorizeSession(authorization, uploadSessionId);
+    const input = requireRecord(body, 'UPLOAD_PART_INPUT_INVALID');
+    if (
+      typeof input.checksumValue !== 'string' ||
+      typeof input.contentLength !== 'number'
+    ) {
+      throw new Error('UPLOAD_PART_INPUT_INVALID');
+    }
+    return this.requireUploads().issueMultipartPartCapability({
+      actor: authorization.actor,
+      causationId: authorization.correlationId,
+      checksumValue: input.checksumValue,
+      contentLength: input.contentLength,
+      correlationId: authorization.correlationId,
+      partNumber,
+      tenantId: authorization.tenantId,
+      uploadSessionId,
+    });
+  }
+
+  async completeUpload(
+    authorization: ApiAuthorization,
+    uploadSessionId: string,
+    body: unknown,
+    rawIdempotencyKey: string | undefined,
+  ) {
+    await this.authorizeSession(authorization, uploadSessionId);
+    const input = requireRecord(body, 'UPLOAD_COMPLETION_INPUT_INVALID');
+    const parts = input.parts;
+    if (parts !== undefined && !Array.isArray(parts)) {
+      throw new Error('UPLOAD_COMPLETION_PARTS_INVALID');
+    }
+    return this.requireUploads().complete({
+      actor: authorization.actor,
+      causationId: authorization.correlationId,
+      correlationId: authorization.correlationId,
+      idempotencyKey: requireIdempotencyKey(rawIdempotencyKey),
+      ...(parts === undefined
+        ? {}
+        : { parts: parts as readonly MultipartCompletionReceipt[] }),
+      tenantId: authorization.tenantId,
+      uploadSessionId,
+    });
+  }
+
+  async abortUpload(authorization: ApiAuthorization, uploadSessionId: string) {
+    const session = await this.authorizeSession(authorization, uploadSessionId);
+    if (session.status !== 'ACTIVE') return session;
+    if (session.multipartUploadReference !== undefined) {
+      await this.requireStorage().abortMultipartUpload({
+        storageObjectId: session.storageObjectId,
+        tenantId: authorization.tenantId,
+        uploadReference: session.multipartUploadReference,
+      });
+    } else {
+      const object = await this.requireStorage().inspectUpload({
+        storageObjectId: session.storageObjectId,
+        tenantId: authorization.tenantId,
+      });
+      if (object !== undefined) {
+        await this.requireStorage().deleteExactVersion({
+          key: object.key,
+          versionId: object.versionId,
+        });
+      }
+    }
+    return this.requireSessions().abort({
+      actor: authorization.actor,
+      causationId: authorization.correlationId,
+      correlationId: authorization.correlationId,
+      expectedStateVersion: session.stateVersion,
+      tenantId: authorization.tenantId,
+      uploadSessionId,
+    });
+  }
+
+  async getExecution(authorization: ApiAuthorization, executionId: string) {
+    const execution = await this.requireExecutions().findById(
+      authorization.tenantId,
+      executionId,
+    );
+    if (execution === undefined) throw new Error('EXECUTION_NOT_FOUND');
+    authorizeProject(authorization, execution.projectId);
+    return {
+      ...executionView(execution),
+      auditTrail: await this.requireExecutions().listAuditEvents(
+        authorization.tenantId,
+        executionId,
+      ),
+    };
+  }
+
+  async listExecutions(authorization: ApiAuthorization, workflowId: string) {
+    await this.getWorkflow(authorization, workflowId);
+    const executions = await this.requireExecutions().listByWorkflow(
+      authorization.tenantId,
+      workflowId,
+    );
+    return executions.map(executionView);
+  }
+
+  async retryExecution(
+    authorization: ApiAuthorization,
+    executionId: string,
+    rawIdempotencyKey: string | undefined,
+  ) {
+    const original = await this.requireExecutions().findById(
+      authorization.tenantId,
+      executionId,
+    );
+    if (original === undefined) throw new Error('EXECUTION_NOT_FOUND');
+    authorizeProject(authorization, original.projectId);
+    const idempotencyKey = requireIdempotencyKey(rawIdempotencyKey);
+    const execution = await this.requireExecutions().retry({
+      actor: authorization.actor,
+      causationId: idempotencyKey,
+      correlationId: authorization.correlationId,
+      executionId,
+      idempotencyKey,
+      retryExecutionId: uuidFrom(
+        'execution-retry',
+        authorization.tenantId,
+        idempotencyKey,
+      ),
+      tenantId: authorization.tenantId,
+    });
+    return executionView(execution);
+  }
+
+  async acceptExtractionCallback(
+    body: Buffer,
+    signature: string | undefined,
+    timestamp: string | undefined,
+  ) {
+    if (signature === undefined || timestamp === undefined) {
+      throw new Error('EXTRACTION_CALLBACK_UNAUTHENTICATED');
+    }
+    const callback = verifyExtractionCallback({
+      body,
+      now: new Date(),
+      secret: 'aiflow-demo-callback-secret',
+      signature,
+      timestamp,
+    });
+    return this.requirePipeline().acceptExtractionCallback({
+      adapterId: 'fake-extraction',
+      bodySha256: createHash('sha256').update(body).digest('hex'),
+      callbackCorrelationId: callback.callbackCorrelationId,
+      providerEventId: callback.eventId,
+      safeStatus: callback.status,
+    });
+  }
+
+  private async authorizeSession(
+    authorization: ApiAuthorization,
+    uploadSessionId: string,
+  ) {
+    const session = await this.requireSessions().findById(
+      authorization.tenantId,
+      uploadSessionId,
+    );
+    if (session === undefined) throw new Error('UPLOAD_SESSION_NOT_FOUND');
+    authorizeProject(authorization, session.projectId);
+    return session;
+  }
+
+  private workflowView(
+    workflow: WorkflowRecord,
+    version?: {
+      id: string;
+      versionNumber: number;
+      definition: { definition: WorkflowDefinitionV1 };
+    },
+  ) {
+    return {
+      acceptingNewDocuments: workflow.acceptingNewDocuments,
+      activeVersionId: workflow.activeVersionId ?? null,
+      createdAt: workflow.createdAt,
+      health: workflow.health,
+      id: workflow.id,
+      latestVersion:
+        version === undefined
+          ? null
+          : {
+              definition: version.definition.definition,
+              id: version.id,
+              schemaVersion: 1,
+              status: 'VALID',
+              versionNumber: version.versionNumber,
+            },
+      name: workflow.name,
+      projectId: workflow.projectId,
+      status: workflow.status,
+      updatedAt: workflow.updatedAt,
+    };
+  }
+
+  private requireExecutions() {
+    if (!this.executions) throw new Error('API_NOT_READY');
+    return this.executions;
+  }
+  private requirePipeline() {
+    if (!this.pipeline) throw new Error('API_NOT_READY');
+    return this.pipeline;
+  }
+  private requireProvisioning() {
+    if (!this.provisioning) throw new Error('API_NOT_READY');
+    return this.provisioning;
+  }
+  private requireSessions() {
+    if (!this.sessions) throw new Error('API_NOT_READY');
+    return this.sessions;
+  }
+  private requireStorage() {
+    if (!this.storage) throw new Error('API_NOT_READY');
+    return this.storage;
+  }
+  private requireUploads() {
+    if (!this.uploads) throw new Error('API_NOT_READY');
+    return this.uploads;
+  }
+  private requireWorkflows() {
+    if (!this.workflows) throw new Error('API_NOT_READY');
+    return this.workflows;
+  }
+}

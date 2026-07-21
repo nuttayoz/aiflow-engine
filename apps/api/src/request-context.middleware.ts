@@ -7,6 +7,7 @@ const CORRELATION_HEADER = 'X-Correlation-ID';
 const MAX_LOGGED_PATH_LENGTH = 2_048;
 
 interface HttpRequest {
+  aiflowCorrelationId?: string;
   headers: IncomingHttpHeaders;
   method?: string;
   originalUrl?: string;
@@ -43,6 +44,7 @@ export const createRequestContextMiddleware =
     let logged = false;
 
     response.setHeader(CORRELATION_HEADER, correlationId);
+    request.aiflowCorrelationId = correlationId;
 
     const logCompletion = (outcome: 'ABORTED' | 'COMPLETED'): void => {
       if (logged) {
