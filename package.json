@@ -18,6 +18,7 @@
     "packages/storage",
     "packages/connector-sdk",
     "packages/connector-test-suite",
+    "packages/api-client",
     "packages/workflows",
     "packages/connections",
     "packages/documents",
@@ -26,7 +27,8 @@
     "packages/mappings",
     "packages/review",
     "packages/templates",
-    "packages/connectors/*"
+    "packages/connectors/*",
+    "tools/demo-ui"
   ],
   "bin": {
     "aiflow-engine": "./scripts/aiflow-engine.cjs"
@@ -50,6 +52,9 @@
     "migrate": "node --env-file-if-exists=.env scripts/aiflow-engine.cjs migrate",
     "phase1:prepare": "bun run infra:up && bun run db:migrate",
     "phase1:smoke": "bun run build && node --env-file-if-exists=.env scripts/phase1-smoke.cjs",
+    "phase2:demo": "node tools/demo-ui/server.cjs",
+    "phase2:prepare": "bun run infra:up && bun run db:migrate",
+    "phase2:smoke": "bun run build && node --env-file-if-exists=.env scripts/phase2-smoke.cjs",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "test": "jest --runInBand",

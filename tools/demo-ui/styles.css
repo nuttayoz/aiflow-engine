@@ -1,0 +1,253 @@
+:root {
+  color: #18201d;
+  background: #f3f5f1;
+  font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+}
+* {
+  box-sizing: border-box;
+}
+body {
+  margin: 0;
+}
+header {
+  height: 86px;
+  padding: 18px 32px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: #173c31;
+  color: white;
+}
+h1,
+h2,
+h3,
+p {
+  margin-top: 0;
+}
+h1 {
+  margin-bottom: 0;
+  font-size: 25px;
+}
+.eyebrow {
+  margin-bottom: 5px;
+  color: #6c8078;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+}
+header .eyebrow {
+  color: #9cd4c1;
+}
+main {
+  min-height: calc(100vh - 86px);
+  display: grid;
+  grid-template-columns: 220px 1fr;
+}
+aside {
+  padding: 28px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  background: white;
+  border-right: 1px solid #dfe5df;
+}
+.nav {
+  padding: 11px 13px;
+  text-align: left;
+  color: #48534f;
+  border: 0;
+  background: transparent;
+}
+.nav.active {
+  color: #145a46;
+  background: #e6f3ed;
+}
+.identity {
+  margin-top: auto;
+  padding: 14px;
+  display: grid;
+  gap: 3px;
+  border: 1px solid #dce5df;
+  border-radius: 10px;
+}
+.identity span,
+.identity small {
+  color: #728079;
+  font-size: 11px;
+}
+.content {
+  width: min(100%, 980px);
+  padding: 40px 50px;
+}
+.title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 15px;
+}
+.pill {
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: #e5eee9;
+  color: #245342;
+  font-size: 12px;
+  font-weight: 750;
+}
+.cards {
+  display: grid;
+  gap: 12px;
+}
+.card,
+form,
+.execution {
+  padding: 22px;
+  border: 1px solid #dce4dd;
+  border-radius: 13px;
+  background: white;
+  box-shadow: 0 4px 16px #193e3008;
+}
+.card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.card p {
+  margin-bottom: 0;
+  color: #708078;
+  font-size: 13px;
+}
+button {
+  padding: 10px 15px;
+  border: 1px solid #15634b;
+  border-radius: 8px;
+  color: white;
+  background: #15634b;
+  cursor: pointer;
+  font-weight: 700;
+}
+button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+button.secondary {
+  color: #345249;
+  background: white;
+  border-color: #c9d7ce;
+}
+.steps {
+  margin: 25px 0 12px;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+}
+.step {
+  padding: 9px;
+  border-bottom: 3px solid #ced9d2;
+  color: #79857e;
+  font-size: 12px;
+  font-weight: 750;
+}
+.step.active {
+  border-color: #1b765a;
+  color: #145c47;
+}
+fieldset {
+  padding: 0;
+  border: 0;
+  display: grid;
+  gap: 17px;
+}
+label {
+  display: grid;
+  gap: 7px;
+  color: #45524c;
+  font-size: 13px;
+  font-weight: 700;
+}
+input,
+select {
+  width: 100%;
+  padding: 11px 12px;
+  border: 1px solid #cbd7cf;
+  border-radius: 8px;
+  color: #1c2823;
+  background: white;
+  font: inherit;
+}
+.hint {
+  padding: 12px;
+  border-radius: 8px;
+  color: #4d665c;
+  background: #edf4f0;
+  font-size: 13px;
+}
+.actions {
+  margin-top: 22px;
+  display: flex;
+  justify-content: flex-end;
+  gap: 9px;
+}
+.drop {
+  margin: 12px 0 18px;
+  padding: 24px;
+  border: 1px dashed #8ba99b;
+  border-radius: 10px;
+  background: #f6faf7;
+}
+.execution {
+  margin-top: 18px;
+}
+.stage-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+}
+.stage {
+  padding: 12px;
+  border-radius: 8px;
+  background: #f0f4f1;
+  font-size: 12px;
+}
+.stage strong {
+  display: block;
+  margin-bottom: 4px;
+}
+.summary {
+  line-height: 1.7;
+}
+.notice {
+  margin-bottom: 16px;
+  padding: 12px 15px;
+  border-radius: 8px;
+  background: #fff0d6;
+  color: #6e4b0b;
+}
+pre {
+  overflow: auto;
+  padding: 12px;
+  border-radius: 8px;
+  background: #291f20;
+  color: #ffd9d9;
+}
+.hidden {
+  display: none !important;
+}
+@media (max-width: 720px) {
+  main {
+    grid-template-columns: 1fr;
+  }
+  aside {
+    flex-direction: row;
+    overflow: auto;
+  }
+  .identity {
+    display: none;
+  }
+  .content {
+    padding: 25px 18px;
+  }
+  .stage-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}

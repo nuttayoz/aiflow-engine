@@ -1,0 +1,51 @@
+{
+  "definition": {
+    "schemaVersion": 1,
+    "entry": {
+      "connectorId": "direct-upload",
+      "config": {}
+    },
+    "extraction": {
+      "profileId": "invoice-basic",
+      "config": {}
+    },
+    "mappings": [
+      {
+        "sourceField": "currency_code",
+        "targetField": "currencyCode",
+        "required": true
+      },
+      {
+        "sourceField": "invoice_date",
+        "targetField": "invoiceDate",
+        "required": true
+      },
+      {
+        "sourceField": "total",
+        "targetField": "totalAmount",
+        "required": true
+      },
+      {
+        "sourceField": "invoice_number",
+        "targetField": "vendorInvoiceNumber",
+        "required": true
+      },
+      {
+        "sourceField": "vendor_number",
+        "targetField": "vendorNumber",
+        "required": true
+      }
+    ],
+    "reviewPolicy": {
+      "required": false
+    },
+    "destination": {
+      "connectorId": "microsoft-business-central",
+      "actionId": "create-purchase-invoice-draft",
+      "config": {
+        "companyId": "demo-company"
+      }
+    }
+  },
+  "name": "Invoice intake"
+}

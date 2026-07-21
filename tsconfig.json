@@ -9,6 +9,7 @@
     { "path": "./packages/storage" },
     { "path": "./packages/connector-sdk" },
     { "path": "./packages/connector-test-suite" },
+    { "path": "./packages/api-client" },
     { "path": "./packages/workflows" },
     { "path": "./packages/connections" },
     { "path": "./packages/documents" },
@@ -25,6 +26,7 @@
     { "path": "./packages/connectors/dynamics-nav" },
     { "path": "./apps/api" },
     { "path": "./apps/worker" },
-    { "path": "./apps/scheduler" }
+    { "path": "./apps/scheduler" },
+    { "path": "./tools/demo-ui" }
   ]
 }

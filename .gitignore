@@ -9,3 +9,5 @@ coverage/
 .idea/
 .vscode/
 *.log
+tools/demo-ui/.dist/
+tools/demo-ui/.dist-types/
