@@ -8,6 +8,8 @@ import {
   type RuntimeProcess,
 } from '@aiflow/core';
 
+export * from './runtime-telemetry';
+
 const REDACTED = '[REDACTED]';
 const OMITTED_LOG_PAYLOAD = 'Non-scalar log payload omitted';
 
