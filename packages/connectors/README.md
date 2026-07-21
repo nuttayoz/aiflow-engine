@@ -1,6 +1,9 @@
 # Connector Packages
 
-These directories reserve provider boundaries only. They contain no connector behavior yet.
+The provider-neutral SDK and shared contract checks are implemented in Phase 1.
+The `direct-upload` entry descriptor and a non-production `phase1-synthetic`
+destination are installed at this stage. Provider adapters remain reserved until
+their owning roadmap phase.
 
 Initial connector targets:
 

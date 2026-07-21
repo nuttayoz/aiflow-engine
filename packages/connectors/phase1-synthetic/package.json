@@ -1,5 +1,5 @@
 {
-  "name": "@aiflow/connector-direct-upload",
+  "name": "@aiflow/connector-phase1-synthetic",
   "version": "0.1.0",
   "private": true,
   "main": "dist/index.js",
