@@ -372,6 +372,15 @@ The Phase 1 storage slice adds:
 
 An emulator cannot prove AWS IAM, KMS, bucket policy, VPC endpoint, CORS, presigned signature age, lifecycle timing, or every checksum/versioning detail. Before Phase 1 exits, the same AWS-specific contract suite runs against a disposable non-production AWS bucket with exact target controls. The local container choice and exact image are verified/pinned during the Phase 1 dependency freeze; production behavior cannot branch on the emulator.
 
+The pinned local/test emulator is Moto 5.2.2. Moto does not return S3 additional
+checksum response headers, so local configuration explicitly enables a metadata
+fallback while the adapter still recalculates SHA-256 over every read stream.
+Production configuration rejects this fallback and requires S3's checksum
+headers. The disposable real-AWS contract run remains a platform validation gate.
+Run that gate with `bun run test:aws-s3-contract` after supplying
+`AWS_S3_CONTRACT_BUCKET`, `AWS_S3_CONTRACT_REGION`, and
+`AWS_S3_CONTRACT_KMS_KEY_ID` through the approved CI secret/configuration path.
+
 Local reset tooling must verify an explicit local endpoint and bucket prefix before deleting anything. It refuses to run against AWS or an unknown endpoint.
 
 ## Required implementation evidence

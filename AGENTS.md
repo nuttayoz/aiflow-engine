@@ -76,7 +76,19 @@ Do not silently choose between conflicting rules. State the conflict and resolve
 
 ## Git and change discipline
 
-- Use a focused branch and Conventional Commits as defined in [`CONTRIBUTING.md`](CONTRIBUTING.md).
+- Keep one branch for one roadmap phase outcome. Use `phase<number>/<outcome>` for
+  phase delivery branches, for example `phase1/foundation` or
+  `phase2/direct-upload`.
+- Before a large implementation, state the intended commit slices. Commit each
+  coherent capability separately instead of collecting the whole phase in one
+  commit.
+- Use Conventional Commits as defined in [`CONTRIBUTING.md`](CONTRIBUTING.md).
+- Keep commits dependency-ordered, reviewable, and free of unrelated changes.
+  Include a capability's focused tests and documentation with it when that makes
+  the change easier to understand.
+- Do not publish `wip!`, `fixup!`, or broken intermediate commits. Run the most
+  relevant available checks before each commit and the full quality gate before
+  opening the pull request.
 - Do not commit, push, rewrite history, delete user changes, or alter remotes unless the user explicitly requests it.
 - Keep generated artifacts, secrets, local environment files, and build output out of Git.
 - Update contracts, ADRs, and operational notes in the same change as the behavior they govern.

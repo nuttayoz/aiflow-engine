@@ -18,6 +18,7 @@
     { "path": "./packages/review" },
     { "path": "./packages/templates" },
     { "path": "./packages/connectors/direct-upload" },
+    { "path": "./packages/connectors/phase1-synthetic" },
     { "path": "./packages/connectors/generic-webhook" },
     { "path": "./packages/connectors/microsoft-sharepoint" },
     { "path": "./packages/connectors/microsoft-business-central" },

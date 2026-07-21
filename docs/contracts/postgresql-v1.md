@@ -489,7 +489,12 @@ The first PostgreSQL slice in Phase 1 implements:
 - PostgreSQL integration tests against the same exact version, using isolated test databases;
 - documented reset/reseed commands that never target a non-local database.
 
-The operational commands, local identities, readiness behavior, rollout, and recovery procedure are documented in [`../operations/postgresql.md`](../operations/postgresql.md). The foundation migration stream intentionally contains no domain tables; those arrive only with their owning Phase 1 use cases and reviewed migrations.
+The operational commands, local identities, readiness behavior, rollout, and
+recovery procedure are documented in
+[`../operations/postgresql.md`](../operations/postgresql.md). The reviewed
+foundation migration now implements the Phase 1 records and constraints defined
+by this contract; provider-specific records remain deferred to their owning
+roadmap phases.
 
 Local Kubernetes is not required. RabbitMQ and S3-compatible local dependencies arrive in their own Phase 1 slices so failures remain easy to diagnose.
 

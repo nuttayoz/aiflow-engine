@@ -26,14 +26,21 @@ Clean architecture means clear dependency boundaries, not more folders or layers
 
 ## Development workflow
 
-1. Start from the latest `main` and create a short-lived branch.
+1. Start from the latest `main` and create one branch for the roadmap phase outcome.
 2. Confirm the active roadmap phase and relevant contract before coding.
-3. Add or update tests and documentation with the implementation.
-4. Run the local quality gate.
-5. Open a focused pull request and complete the template.
-6. Use squash merge after required checks and reviews pass.
+3. Write down the intended commit slices before a large implementation.
+4. Implement and commit one coherent capability at a time, including its focused
+   tests and documentation where practical.
+5. Run the local quality gate.
+6. Open a focused pull request and complete the template.
+7. Use squash merge after required checks and reviews pass.
 
-Supported branch prefixes are `phase/`, `feat/`, `fix/`, `refactor/`, `test/`, `docs/`, `chore/`, and `ci/`. Use lowercase kebab-case after the prefix, for example `feat/sharepoint-ingestion`.
+Phase delivery branches use `phase<number>/<outcome>` in lowercase kebab-case,
+for example `phase1/foundation` or `phase2/direct-upload`. Keep the whole phase
+outcome on that branch; do not create a branch for every small task or commit.
+For non-roadmap work, supported prefixes are `feat/`, `fix/`, `refactor/`,
+`test/`, `docs/`, `chore/`, and `ci/`, for example
+`fix/duplicate-webhook-delivery`.
 
 Do not push directly to `main`. Repository administrators should enable branch protection, required checks, required CODEOWNER review, conversation resolution, and prevention of force pushes/deletion.
 
@@ -72,6 +79,24 @@ Keep the header at 72 characters or fewer. Use a `BREAKING CHANGE:` footer only 
 ```bash
 bun run commitlint --edit .git/COMMIT_EDITMSG
 ```
+
+### Commit structure
+
+- Split a phase into dependency-ordered commits that each tell one clear story.
+- Prefer a complete capability slice—implementation plus its focused tests—over
+  commits organized only by file type.
+- Separate cross-cutting documentation, build configuration, or operational work
+  when it is substantial enough to review independently.
+- Keep refactors separate from behavior changes unless the refactor is required
+  to make that behavior possible.
+- Do not use `wip!` commits in a pull request. Fold temporary fixups into the
+  commit they correct before publishing.
+- Run the most relevant available check before each commit. Every pull request
+  must still pass the full quality gate.
+
+There is no fixed commit count or line limit. A normal phase may contain several
+small, meaningful commits; avoid both one giant phase commit and artificial
+one-file commits.
 
 ## Coding and review conventions
 

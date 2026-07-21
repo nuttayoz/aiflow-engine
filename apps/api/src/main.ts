@@ -5,12 +5,14 @@ import { NestFactory } from '@nestjs/core';
 import {
   loadApiRuntimeConfig,
   loadDatabaseRuntimeConfig,
+  loadObservabilityRuntimeConfig,
   loadRuntimeConfig,
 } from '@aiflow/config';
 import { RequestContextStore } from '@aiflow/core';
 import {
   createStructuredLogger,
   NestStructuredLogger,
+  RuntimeTelemetry,
   toSafeErrorLog,
 } from '@aiflow/observability';
 
@@ -22,11 +24,17 @@ let logger = createStructuredLogger({
   level: 'info',
   role: 'api',
 });
+let telemetry: RuntimeTelemetry | undefined;
 
 const bootstrap = async (): Promise<void> => {
   const runtimeConfig = loadRuntimeConfig('api');
   const apiConfig = loadApiRuntimeConfig();
   const databaseConfig = loadDatabaseRuntimeConfig();
+  telemetry = new RuntimeTelemetry(
+    loadObservabilityRuntimeConfig('api'),
+    runtimeConfig.environment,
+    runtimeConfig.role,
+  );
   const contextStore = new RequestContextStore();
 
   logger = createStructuredLogger({
@@ -36,9 +44,10 @@ const bootstrap = async (): Promise<void> => {
     role: runtimeConfig.role,
   });
 
-  const app = await NestFactory.create(ApiModule.register(databaseConfig), {
-    logger: new NestStructuredLogger(logger),
-  });
+  const app = await NestFactory.create(
+    ApiModule.register(databaseConfig, telemetry),
+    { logger: new NestStructuredLogger(logger) },
+  );
 
   app.use(createRequestContextMiddleware(contextStore, logger));
   app.enableShutdownHooks();
@@ -54,10 +63,12 @@ const bootstrap = async (): Promise<void> => {
   );
 };
 
-void bootstrap().catch((error: unknown) => {
+void bootstrap().catch(async (error: unknown) => {
+  telemetry?.captureException(error, 'runtime.startup');
   logger.fatal(
     { event: 'runtime.startup.failed', ...toSafeErrorLog(error) },
     'API failed to start',
   );
+  await telemetry?.close();
   process.exitCode = 1;
 });

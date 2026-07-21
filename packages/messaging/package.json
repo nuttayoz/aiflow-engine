@@ -6,5 +6,15 @@
   "types": "dist/index.d.ts",
   "files": [
     "dist"
-  ]
+  ],
+  "dependencies": {
+    "@aiflow/core": "workspace:*",
+    "@aiflow/executions": "workspace:*",
+    "@aiflow/observability": "workspace:*",
+    "@aiflow/config": "workspace:*",
+    "@nestjs/common": "11.1.28",
+    "amqplib": "2.0.1",
+    "ajv": "8.20.0",
+    "ajv-formats": "3.0.1"
+  }
 }

@@ -10,8 +10,13 @@
   "exclude": ["src/**/*.spec.ts"],
   "references": [
     { "path": "../../packages/config" },
+    { "path": "../../packages/connectors/direct-upload" },
+    { "path": "../../packages/connectors/phase1-synthetic" },
+    { "path": "../../packages/connector-sdk" },
     { "path": "../../packages/core" },
     { "path": "../../packages/database" },
-    { "path": "../../packages/observability" }
+    { "path": "../../packages/messaging" },
+    { "path": "../../packages/observability" },
+    { "path": "../../packages/workflows" }
   ]
 }

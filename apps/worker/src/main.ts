@@ -2,15 +2,21 @@ import 'reflect-metadata';
 
 import { NestFactory } from '@nestjs/core';
 
-import { loadDatabaseRuntimeConfig, loadRuntimeConfig } from '@aiflow/config';
+import {
+  loadDatabaseRuntimeConfig,
+  loadObservabilityRuntimeConfig,
+  loadRabbitMqRuntimeConfig,
+  loadRuntimeConfig,
+} from '@aiflow/config';
 import { waitForTerminationSignal } from '@aiflow/core';
 import {
   createStructuredLogger,
   NestStructuredLogger,
+  RuntimeTelemetry,
   toSafeErrorLog,
 } from '@aiflow/observability';
 
-import { parseQueueSelection } from './queue-selection';
+import { parseQueueSelection, resolveQueueNames } from './queue-selection';
 import { WorkerModule } from './worker.module';
 
 let logger = createStructuredLogger({
@@ -18,11 +24,18 @@ let logger = createStructuredLogger({
   level: 'info',
   role: 'worker',
 });
+let telemetry: RuntimeTelemetry | undefined;
 
 const bootstrap = async (): Promise<void> => {
   const runtimeConfig = loadRuntimeConfig('worker');
   const databaseConfig = loadDatabaseRuntimeConfig();
-  const queues = parseQueueSelection(process.argv.slice(2));
+  const rabbitMqConfig = loadRabbitMqRuntimeConfig();
+  telemetry = new RuntimeTelemetry(
+    loadObservabilityRuntimeConfig('worker'),
+    runtimeConfig.environment,
+    runtimeConfig.role,
+  );
+  const queues = resolveQueueNames(parseQueueSelection(process.argv.slice(2)));
 
   logger = createStructuredLogger({
     environment: runtimeConfig.environment,
@@ -31,24 +44,31 @@ const bootstrap = async (): Promise<void> => {
   });
 
   const app = await NestFactory.createApplicationContext(
-    WorkerModule.register(databaseConfig),
+    WorkerModule.register({
+      database: databaseConfig,
+      queueNames: queues,
+      rabbitMq: rabbitMqConfig,
+      syntheticStagesEnabled: runtimeConfig.environment !== 'production',
+      telemetry,
+    }),
     {
       logger: new NestStructuredLogger(logger),
     },
   );
 
-  app.enableShutdownHooks();
-  logger.info({ event: 'runtime.started', queues }, 'Worker skeleton started');
+  logger.info({ event: 'runtime.started', queues }, 'Worker started');
 
   const signal = await waitForTerminationSignal();
   logger.info({ event: 'runtime.stopping', signal }, 'Worker stopping');
   await app.close();
 };
 
-void bootstrap().catch((error: unknown) => {
+void bootstrap().catch(async (error: unknown) => {
+  telemetry?.captureException(error, 'runtime.startup');
   logger.fatal(
     { event: 'runtime.startup.failed', ...toSafeErrorLog(error) },
     'Worker failed to start',
   );
+  await telemetry?.close();
   process.exitCode = 1;
 });
