@@ -17,6 +17,7 @@ import type { S3RuntimeConfig } from '@aiflow/config';
 import {
   DatabaseService,
   PostgresConnectionRepository,
+  PostgresDocumentRepository,
   PostgresExecutionRepository,
   PostgresPipelineRepository,
   PostgresUploadSessionRepository,
@@ -86,7 +87,10 @@ const projectWorkflow = (
   return workflow;
 };
 
-const executionView = (execution: ExecutionRecord) => ({
+const executionView = (
+  execution: ExecutionRecord,
+  originalFilename?: string,
+) => ({
   allowedActions:
     execution.status === 'FAILED' &&
     ['EXTRACT', 'MAP'].includes(execution.currentStage)
@@ -99,6 +103,7 @@ const executionView = (execution: ExecutionRecord) => ({
   documentId: execution.documentId,
   executionId: execution.executionId,
   failure: execution.failure ?? null,
+  originalFilename: originalFilename ?? null,
   retryOfExecutionId: execution.retryOfExecutionId,
   stageSummary: ['EXTRACT', 'MAP', 'REVIEW', 'DELIVER'].map((stage) => {
     const snapshot = execution.stages[stage as keyof typeof execution.stages];
@@ -189,6 +194,7 @@ export class ApiService
   implements OnApplicationBootstrap, OnApplicationShutdown
 {
   private connections?: PostgresConnectionRepository;
+  private documents?: PostgresDocumentRepository;
   private executions?: PostgresExecutionRepository;
   private pipeline?: PostgresPipelineRepository;
   private provisioning?: PostgresWorkflowProvisioningRepository;
@@ -213,6 +219,7 @@ export class ApiService
   onApplicationBootstrap(): void {
     const { dataSource, schema } = this.database;
     this.connections = new PostgresConnectionRepository(dataSource, schema);
+    this.documents = new PostgresDocumentRepository(dataSource, schema);
     this.workflows = new PostgresWorkflowRepository(dataSource, schema);
     this.provisioning = new PostgresWorkflowProvisioningRepository(
       dataSource,
@@ -758,7 +765,7 @@ export class ApiService
     if (execution === undefined) throw new Error('EXECUTION_NOT_FOUND');
     authorizeProject(authorization, execution.projectId);
     return {
-      ...executionView(execution),
+      ...(await this.executionView(authorization.tenantId, execution)),
       auditTrail: await this.requireExecutions().listAuditEvents(
         authorization.tenantId,
         executionId,
@@ -772,7 +779,11 @@ export class ApiService
       authorization.tenantId,
       workflowId,
     );
-    return executions.map(executionView);
+    return Promise.all(
+      executions.map((execution) =>
+        this.executionView(authorization.tenantId, execution),
+      ),
+    );
   }
 
   async retryExecution(
@@ -800,7 +811,7 @@ export class ApiService
       ),
       tenantId: authorization.tenantId,
     });
-    return executionView(execution);
+    return this.executionView(authorization.tenantId, execution);
   }
 
   async acceptExtractionCallback(
@@ -885,6 +896,18 @@ export class ApiService
     };
   }
 
+  private async executionView(tenantId: string, execution: ExecutionRecord) {
+    const document = await this.requireDocuments().findById(
+      tenantId,
+      execution.documentId,
+    );
+    return executionView(execution, document?.originalFilename);
+  }
+
+  private requireDocuments() {
+    if (!this.documents) throw new Error('API_NOT_READY');
+    return this.documents;
+  }
   private requireExecutions() {
     if (!this.executions) throw new Error('API_NOT_READY');
     return this.executions;

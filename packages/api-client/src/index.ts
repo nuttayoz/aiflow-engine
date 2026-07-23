@@ -160,6 +160,7 @@ export interface ExecutionView {
   }[];
   readonly currentStage: string;
   readonly executionId: string;
+  readonly originalFilename: string | null;
   readonly failure: {
     readonly category: string;
     readonly code: string;
