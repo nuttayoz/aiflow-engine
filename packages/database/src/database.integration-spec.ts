@@ -240,6 +240,20 @@ describe('PostgreSQL foundation', () => {
     };
     const requested = await provisioning.requestActivation(activationInput);
     await expect(
+      provisioning.findCurrentByWorkflow(tenantId, workflowId),
+    ).resolves.toMatchObject({ id: requested.id, status: 'PENDING' });
+    await expect(
+      provisioning.requestDeactivation({
+        actor: { id: 'user-a', type: 'USER' },
+        causationId: 'deactivate-during-activation',
+        correlationId: 'correlation-a',
+        idempotencyKey: 'deactivate-during-activation',
+        projectId,
+        tenantId,
+        workflowId,
+      }),
+    ).rejects.toThrow('WORKFLOW_PROVISIONING_IN_PROGRESS');
+    await expect(
       provisioning.requestActivation({
         ...activationInput,
         operationId: randomUUID(),
@@ -274,6 +288,9 @@ describe('PostgreSQL foundation', () => {
       operationId: requested.id,
       tenantId,
     });
+    await expect(
+      provisioning.findCurrentByWorkflow(tenantId, workflowId),
+    ).resolves.toBeUndefined();
     await expect(
       workflows.findById(tenantId, workflowId),
     ).resolves.toMatchObject({
@@ -562,6 +579,101 @@ describe('PostgreSQL foundation', () => {
       stateVersion: 3,
       stages: { EXTRACT: { status: 'PENDING' } },
     });
+  });
+
+  it('closes workflow intake immediately and replays deactivation idempotently', async () => {
+    const workflows = new PostgresWorkflowRepository(
+      runtimeDataSource,
+      runtimeConfig.schema,
+    );
+    const provisioning = new PostgresWorkflowProvisioningRepository(
+      runtimeDataSource,
+      runtimeConfig.schema,
+    );
+    const tenantId = 'tenant-deactivation';
+    const projectId = 'project-deactivation';
+    const workflowId = randomUUID();
+    const versionId = randomUUID();
+    await workflows.create({
+      actor: { id: 'user-a', type: 'USER' },
+      causationId: 'create-deactivation-workflow',
+      correlationId: 'deactivation-correlation',
+      definition: validatedDefinition,
+      name: 'Deactivation workflow',
+      projectId,
+      tenantId,
+      versionId,
+      workflowId,
+    });
+
+    const operationId = randomUUID();
+    const operation = await provisioning.requestActivation({
+      actor: { id: 'user-a', type: 'USER' },
+      causationId: 'activate-deactivation-workflow',
+      correlationId: 'deactivation-correlation',
+      idempotencyKey: 'activate-deactivation-workflow',
+      operationId,
+      projectId,
+      targetVersionId: versionId,
+      tenantId,
+      workflowId,
+    });
+    const claimed = await provisioning.claim({
+      consumerName: 'provisioning-worker',
+      expectedStateVersion: operation.stateVersion,
+      leaseDurationMs: 30_000,
+      leaseOwner: 'deactivation-worker',
+      messageId: 'deactivation-activation-message',
+      messageType: 'aiflow.workflow.provisioning.requested.v1',
+      operationId,
+      projectId,
+      tenantId,
+    });
+    if (claimed === undefined) {
+      throw new Error('expected claimed activation');
+    }
+    await provisioning.completeActivation({
+      expectedStateVersion: claimed.stateVersion,
+      leaseOwner: 'deactivation-worker',
+      operationId,
+      tenantId,
+    });
+
+    const deactivationInput = {
+      actor: { id: 'user-a', type: 'USER' as const },
+      causationId: 'deactivate-workflow',
+      correlationId: 'deactivation-correlation',
+      idempotencyKey: 'deactivate-workflow-once',
+      projectId,
+      tenantId,
+      workflowId,
+    };
+    const deactivated =
+      await provisioning.requestDeactivation(deactivationInput);
+    expect(deactivated).toEqual({
+      acceptingNewDocuments: false,
+      cleanupRequired: false,
+      health: 'UNKNOWN',
+      workflowId,
+    });
+    await expect(
+      provisioning.requestDeactivation(deactivationInput),
+    ).resolves.toEqual(deactivated);
+    const stored = await workflows.findById(tenantId, workflowId);
+    expect(stored).toMatchObject({
+      acceptingNewDocuments: false,
+      cleanupRequired: false,
+      health: 'UNKNOWN',
+      status: 'INACTIVE',
+    });
+    expect(stored?.activeVersionId).toBeUndefined();
+    await expect(
+      provisioning.requestDeactivation({
+        ...deactivationInput,
+        causationId: 'deactivate-workflow-again',
+        idempotencyKey: 'deactivate-workflow-again',
+      }),
+    ).resolves.toEqual(deactivated);
   });
 
   it('creates immutable workflow versions idempotently with optimistic edit context', async () => {

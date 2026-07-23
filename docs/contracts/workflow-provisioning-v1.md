@@ -329,7 +329,10 @@ The existing workflow-table toggle remains recognizable:
 - failure: show the engine's safe message and allowed action without provider details;
 - success: derive toggle state from `activeVersionId`/`acceptingNewDocuments`, not a browser-maintained boolean.
 
-Phase 3 DevPortal calls AiFlow Engine directly with the bearer token and canonical permission. It removes `x-client-id`, does not call `devportal-backend` for AiFlow activation, and never creates or activates an n8n workflow.
+Phase 3 DevPortal calls AiFlow Engine through its same-origin Next.js BFF and
+the platform API gateway. The BFF forwards the bearer token and canonical
+permission. It does not forward `x-client-id`, call `devportal-backend` for
+AiFlow activation, or create/activate an n8n workflow.
 
 ## Security and observability
 

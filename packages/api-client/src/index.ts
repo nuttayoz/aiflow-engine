@@ -28,6 +28,7 @@ export interface WorkflowDefinitionV1 {
 export interface WorkflowView {
   readonly acceptingNewDocuments: boolean;
   readonly activeVersionId: string | null;
+  readonly cleanupRequired: boolean;
   readonly health: string;
   readonly id: string;
   readonly latestVersion: {
@@ -58,6 +59,36 @@ export interface WorkflowVersionView {
   readonly schemaVersion: 1;
   readonly status: 'VALID';
   readonly versionNumber: number;
+  readonly workflowId: string;
+}
+
+export interface ProvisioningOperationView {
+  readonly activeVersionId: string | null;
+  readonly createdAt: string;
+  readonly currentStep:
+    'DEPROVISION' | 'PROVISION' | 'RECONCILE' | 'SWITCH' | 'VALIDATE';
+  readonly failure: null;
+  readonly id: string;
+  readonly kind: 'ACTIVATE' | 'DEACTIVATE';
+  readonly status:
+    | 'FAILED'
+    | 'PENDING'
+    | 'RECONCILING'
+    | 'RUNNING'
+    | 'SUCCEEDED'
+    | 'WAITING_RETRY';
+  readonly targetVersionId: string | null;
+  readonly updatedAt: string;
+  readonly workflowId: string;
+}
+
+export interface WorkflowActivationView {
+  readonly acceptingNewDocuments: boolean;
+  readonly activeVersionId: string | null;
+  readonly cleanupRequired: boolean;
+  readonly health: 'DEGRADED' | 'HEALTHY' | 'UNKNOWN';
+  readonly operation: ProvisioningOperationView | null;
+  readonly targetVersionId: string | null;
   readonly workflowId: string;
 }
 
@@ -204,7 +235,7 @@ export class AiFlowClient {
     readonly workflowId: string;
     readonly versionId: string;
     readonly idempotencyKey?: string;
-  }): Promise<{ readonly id: string; readonly status: string }> {
+  }): Promise<ProvisioningOperationView> {
     return this.request(
       `/api/v1/workflows/${encodeURIComponent(input.workflowId)}/activation`,
       {
@@ -219,9 +250,31 @@ export class AiFlowClient {
 
   getProvisioningOperation(
     operationId: string,
-  ): Promise<{ readonly id: string; readonly status: string }> {
+  ): Promise<ProvisioningOperationView> {
     return this.request(
       `/api/v1/provisioning-operations/${encodeURIComponent(operationId)}`,
+    );
+  }
+
+  getWorkflowActivation(workflowId: string): Promise<WorkflowActivationView> {
+    return this.request(
+      `/api/v1/workflows/${encodeURIComponent(workflowId)}/activation`,
+    );
+  }
+
+  deactivateWorkflow(input: {
+    readonly idempotencyKey?: string;
+    readonly workflowId: string;
+  }): Promise<WorkflowActivationView> {
+    return this.request(
+      `/api/v1/workflows/${encodeURIComponent(input.workflowId)}/activation`,
+      {
+        headers: {
+          'Idempotency-Key':
+            input.idempotencyKey ?? randomKey('workflow-deactivation'),
+        },
+        method: 'DELETE',
+      },
     );
   }
 

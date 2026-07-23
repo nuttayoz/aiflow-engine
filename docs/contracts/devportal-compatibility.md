@@ -49,17 +49,17 @@ Phase 2 proved the canonical direct-upload journey without changing either
 legacy repository. The remaining compatibility work is intentionally divided
 at the public API and frontend service seams:
 
-| Surface                  | Engine state at Phase 3 entry                        | Phase 3 action                                                                                               |
-| ------------------------ | ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
-| Workflow create/list/get | Implemented and exercised by the demo harness        | Reuse directly from the existing workflow service                                                            |
-| Immutable workflow edit  | Create/list/get API and typed client implemented     | Migrate the edit builder after activation/archive lifecycle projections are complete                         |
-| Activation               | Activation request and operation polling implemented | Add activation read and idempotent deactivation                                                              |
-| Workflow removal         | Not implemented                                      | Add archive/delete policy and API behavior                                                                   |
-| Catalogs                 | Connector and extraction-profile list implemented    | Add only detail/projection fields required by the existing wizard                                            |
-| Connections              | Not implemented                                      | Add Business Central connection APIs before exposing real destination setup                                  |
-| Direct upload/execution  | Implemented, including retry and recovery            | Replace the demo page's base64 invocation at its service boundary                                            |
-| Authentication           | Local test identity only; production fails closed    | Add the approved OIDC and project-authorization adapters before real DevPortal traffic                       |
-| Review                   | Engine review resources are intentionally deferred   | Preserve legacy routes for existing workflows; new review-enabled workflows remain unavailable until Phase 5 |
+| Surface                  | Engine state at Phase 3 entry                                                              | Phase 3 action                                                                                               |
+| ------------------------ | ------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------ |
+| Workflow create/list/get | Implemented and exercised by the demo harness                                              | Reuse directly from the existing workflow service                                                            |
+| Immutable workflow edit  | Create/list/get API and typed client implemented                                           | Migrate the edit builder after activation/archive lifecycle projections are complete                         |
+| Activation               | Request/poll/read and immediate idempotent deactivation implemented for current connectors | Add managed cleanup operations only when Phase 4 installs SharePoint provisioning bindings                   |
+| Workflow removal         | Not implemented                                                                            | Add archive/delete policy and API behavior                                                                   |
+| Catalogs                 | Connector and extraction-profile list implemented                                          | Add only detail/projection fields required by the existing wizard                                            |
+| Connections              | Not implemented                                                                            | Add Business Central connection APIs before exposing real destination setup                                  |
+| Direct upload/execution  | Implemented, including retry and recovery                                                  | Replace the demo page's base64 invocation at its service boundary                                            |
+| Authentication           | Local test identity only; production fails closed                                          | Add the approved OIDC and project-authorization adapters before real DevPortal traffic                       |
+| Review                   | Engine review resources are intentionally deferred                                         | Preserve legacy routes for existing workflows; new review-enabled workflows remain unavailable until Phase 5 |
 
 Implementation order:
 

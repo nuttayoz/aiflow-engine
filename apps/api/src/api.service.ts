@@ -32,7 +32,9 @@ import {
 } from '@aiflow/storage';
 import {
   WorkflowDefinitionValidator,
+  type ProvisioningOperationRecord,
   type WorkflowDefinitionV1,
+  type WorkflowDeactivationResult,
   type WorkflowRecord,
   type WorkflowVersionRecord,
 } from '@aiflow/workflows';
@@ -119,6 +121,48 @@ const workflowVersionView = (version: WorkflowVersionRecord) => ({
   status: 'VALID' as const,
   versionNumber: version.versionNumber,
   workflowId: version.workflowId,
+});
+
+const provisioningOperationView = (
+  operation: ProvisioningOperationRecord,
+  activeVersionId?: string,
+) => ({
+  activeVersionId: activeVersionId ?? null,
+  createdAt: operation.createdAt,
+  currentStep: operation.currentStep,
+  failure: null,
+  id: operation.id,
+  kind: operation.kind,
+  status: operation.status,
+  targetVersionId: operation.targetVersionId ?? null,
+  updatedAt: operation.updatedAt,
+  workflowId: operation.workflowId,
+});
+
+const activationView = (
+  workflow: WorkflowRecord,
+  operation?: ProvisioningOperationRecord,
+) => ({
+  acceptingNewDocuments: workflow.acceptingNewDocuments,
+  activeVersionId: workflow.activeVersionId ?? null,
+  cleanupRequired: workflow.cleanupRequired,
+  health: workflow.health,
+  operation:
+    operation === undefined
+      ? null
+      : provisioningOperationView(operation, workflow.activeVersionId),
+  targetVersionId: operation?.targetVersionId ?? null,
+  workflowId: workflow.id,
+});
+
+const deactivationView = (result: WorkflowDeactivationResult) => ({
+  acceptingNewDocuments: result.acceptingNewDocuments,
+  activeVersionId: result.activeVersionId ?? null,
+  cleanupRequired: result.cleanupRequired,
+  health: result.health,
+  operation: null,
+  targetVersionId: null,
+  workflowId: result.workflowId,
 });
 
 @Injectable()
@@ -329,7 +373,7 @@ export class ApiService
       throw new Error('WORKFLOW_VERSION_NOT_FOUND');
     }
     const idempotencyKey = requireIdempotencyKey(rawIdempotencyKey);
-    return this.requireProvisioning().requestActivation({
+    const operation = await this.requireProvisioning().requestActivation({
       actor: authorization.actor,
       causationId: idempotencyKey,
       correlationId: authorization.correlationId,
@@ -344,6 +388,35 @@ export class ApiService
       tenantId: authorization.tenantId,
       workflowId,
     });
+    return provisioningOperationView(operation, workflow.activeVersionId);
+  }
+
+  async getActivation(authorization: ApiAuthorization, workflowId: string) {
+    const workflow = await this.authorizeWorkflow(authorization, workflowId);
+    const operation = await this.requireProvisioning().findCurrentByWorkflow(
+      authorization.tenantId,
+      workflowId,
+    );
+    return activationView(workflow, operation);
+  }
+
+  async deactivateWorkflow(
+    authorization: ApiAuthorization,
+    workflowId: string,
+    rawIdempotencyKey: string | undefined,
+  ) {
+    const workflow = await this.authorizeWorkflow(authorization, workflowId);
+    const idempotencyKey = requireIdempotencyKey(rawIdempotencyKey);
+    const result = await this.requireProvisioning().requestDeactivation({
+      actor: authorization.actor,
+      causationId: idempotencyKey,
+      correlationId: authorization.correlationId,
+      idempotencyKey,
+      projectId: workflow.projectId,
+      tenantId: authorization.tenantId,
+      workflowId,
+    });
+    return deactivationView(result);
   }
 
   async getOperation(authorization: ApiAuthorization, operationId: string) {
@@ -354,7 +427,14 @@ export class ApiService
     if (operation === undefined)
       throw new Error('PROVISIONING_OPERATION_NOT_FOUND');
     authorizeProject(authorization, operation.projectId);
-    return operation;
+    const workflow = await this.requireWorkflows().findById(
+      authorization.tenantId,
+      operation.workflowId,
+    );
+    if (workflow === undefined) {
+      throw new Error('WORKFLOW_NOT_FOUND');
+    }
+    return provisioningOperationView(operation, workflow.activeVersionId);
   }
 
   async createUpload(
@@ -595,6 +675,7 @@ export class ApiService
     return {
       acceptingNewDocuments: workflow.acceptingNewDocuments,
       activeVersionId: workflow.activeVersionId ?? null,
+      cleanupRequired: workflow.cleanupRequired,
       createdAt: workflow.createdAt,
       health: workflow.health,
       id: workflow.id,

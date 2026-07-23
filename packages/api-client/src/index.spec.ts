@@ -139,6 +139,49 @@ describe('DevPortal canonical API client boundary', () => {
     });
   });
 
+  it('reads activation state and deactivates with an idempotency key', async () => {
+    const activation = {
+      acceptingNewDocuments: true,
+      activeVersionId: 'version-2',
+      cleanupRequired: false,
+      health: 'HEALTHY',
+      operation: null,
+      targetVersionId: null,
+      workflowId: 'workflow-1',
+    };
+    const deactivated = {
+      ...activation,
+      acceptingNewDocuments: false,
+      activeVersionId: null,
+      health: 'UNKNOWN',
+    };
+    const fetchMock = jest
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(jsonResponse(activation))
+      .mockResolvedValueOnce(jsonResponse(deactivated));
+    const client = new AiFlowClient('https://engine.example', () => 'token-1');
+
+    await expect(client.getWorkflowActivation('workflow-1')).resolves.toEqual(
+      activation,
+    );
+    await expect(
+      client.deactivateWorkflow({
+        idempotencyKey: 'deactivate-workflow-1',
+        workflowId: 'workflow-1',
+      }),
+    ).resolves.toEqual(deactivated);
+
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      'https://engine.example/api/v1/workflows/workflow-1/activation',
+      'https://engine.example/api/v1/workflows/workflow-1/activation',
+    ]);
+    const deactivate = fetchMock.mock.calls[1]?.[1];
+    expect(deactivate?.method).toBe('DELETE');
+    expect(new Headers(deactivate?.headers).get('Idempotency-Key')).toBe(
+      'deactivate-workflow-1',
+    );
+  });
+
   it('sends document bytes only to the presigned storage capability', async () => {
     const file = new File(['phase-three-upload'], 'invoice.pdf', {
       type: 'application/pdf',

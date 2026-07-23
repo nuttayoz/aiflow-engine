@@ -319,6 +319,30 @@ A newly accepted activation returns a durable provisioning operation with `202 A
 
 Deactivation is idempotent. It closes local intake immediately, cleans managed connector resources asynchronously when required, and does not cancel already accepted executions. Exact API responses, operation states, connector modes, version cutover, and recovery follow [`workflow-provisioning-v1.md`](workflow-provisioning-v1.md).
 
+For the current `NONE`/`VALIDATE_ONLY` connector set, no managed provider
+resource requires cleanup, so deactivation returns `200` with the closed intake
+projection:
+
+```json
+{
+  "data": {
+    "workflowId": "workflow-id",
+    "activeVersionId": null,
+    "acceptingNewDocuments": false,
+    "targetVersionId": null,
+    "operation": null,
+    "cleanupRequired": false,
+    "health": "UNKNOWN"
+  }
+}
+```
+
+Repeating the same `Idempotency-Key` returns the stored projection. A
+deactivation while activation/replacement is non-terminal returns
+`409 WORKFLOW_PROVISIONING_IN_PROGRESS`. Once managed connectors are installed,
+the same endpoint may return `202` with a durable cleanup operation as defined
+by the provisioning contract.
+
 ## Catalog and connection endpoints
 
 | Method and path                                                 | Purpose                                                                     |

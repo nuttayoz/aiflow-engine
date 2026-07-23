@@ -16,6 +16,7 @@ import { table } from './sql';
 interface WorkflowRow {
   accepting_new_documents: boolean;
   active_version_id: string | null;
+  cleanup_required: boolean;
   created_at: Date | string;
   health: WorkflowRecord['health'];
   id: string;
@@ -59,6 +60,7 @@ const mapWorkflow = (row: WorkflowRow): WorkflowRecord => ({
   ...(row.active_version_id === null
     ? {}
     : { activeVersionId: row.active_version_id }),
+  cleanupRequired: row.cleanup_required,
   createdAt: new Date(row.created_at),
   health: row.health,
   id: row.id,
@@ -538,7 +540,8 @@ export class PostgresWorkflowRepository implements WorkflowRepository {
       `
         SELECT
           id, tenant_id, project_id, name, status, active_version_id,
-          accepting_new_documents, health, state_version, created_at, updated_at
+          accepting_new_documents, cleanup_required, health, state_version,
+          created_at, updated_at
         FROM ${this.workflows}
         WHERE tenant_id = $1 AND project_id = $2 AND status <> 'ARCHIVED'
         ORDER BY created_at DESC, id DESC

@@ -220,6 +220,62 @@ const main = async () => {
   if (execution.status !== 'SUCCEEDED') {
     throw new Error(execution.failure?.code ?? 'PHASE2_EXECUTION_FAILED');
   }
+  const activeState = await request(
+    `/api/v1/workflows/${workflow.id}/activation`,
+  );
+  if (
+    activeState.activeVersionId !== workflow.latestVersion.id ||
+    !activeState.acceptingNewDocuments ||
+    activeState.operation !== null
+  ) {
+    throw new Error('SMOKE_ACTIVATION_PROJECTION_INVALID');
+  }
+  const deactivationKey = `deactivation-${runId}`;
+  const deactivated = await request(
+    `/api/v1/workflows/${workflow.id}/activation`,
+    {
+      headers: { 'Idempotency-Key': deactivationKey },
+      method: 'DELETE',
+    },
+  );
+  const replayedDeactivation = await request(
+    `/api/v1/workflows/${workflow.id}/activation`,
+    {
+      headers: { 'Idempotency-Key': deactivationKey },
+      method: 'DELETE',
+    },
+  );
+  if (
+    deactivated.activeVersionId !== null ||
+    deactivated.acceptingNewDocuments ||
+    JSON.stringify(replayedDeactivation) !== JSON.stringify(deactivated)
+  ) {
+    throw new Error('SMOKE_DEACTIVATION_INVALID');
+  }
+  const closedUploadResponse = await fetch(
+    `${baseUrl}/api/v1/workflows/${workflow.id}/upload-sessions`,
+    {
+      body: JSON.stringify({
+        checksum: { algorithm: 'SHA256', value: checksum },
+        contentType: 'application/pdf',
+        originalFilename: 'closed-workflow.pdf',
+        sizeBytes: document.length,
+      }),
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        'Idempotency-Key': `closed-upload-${runId}`,
+      },
+      method: 'POST',
+    },
+  );
+  const closedUploadBody = await closedUploadResponse.json();
+  if (
+    closedUploadResponse.ok ||
+    closedUploadBody.error?.code !== 'WORKFLOW_NOT_ACCEPTING_DOCUMENTS'
+  ) {
+    throw new Error('SMOKE_DEACTIVATION_GATE_FAILED');
+  }
   process.stdout.write(
     `${JSON.stringify(
       {
@@ -229,6 +285,7 @@ const main = async () => {
           status,
         })),
         status: execution.status,
+        workflowAcceptingNewDocuments: deactivated.acceptingNewDocuments,
         workflowId: workflow.id,
       },
       null,

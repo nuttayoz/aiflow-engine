@@ -146,6 +146,35 @@ export class ApiController {
     };
   }
 
+  @Get('workflows/:workflowId/activation')
+  async getActivation(
+    @Req() request: AuthorizedRequest,
+    @Param('workflowId') workflowId: string,
+  ) {
+    return {
+      data: await this.service.getActivation(
+        requireAuthorization(request),
+        workflowId,
+      ),
+    };
+  }
+
+  @Delete('workflows/:workflowId/activation')
+  @HttpCode(200)
+  async deactivateWorkflow(
+    @Req() request: AuthorizedRequest,
+    @Param('workflowId') workflowId: string,
+    @Headers('idempotency-key') idempotencyKey: string | undefined,
+  ) {
+    return {
+      data: await this.service.deactivateWorkflow(
+        requireAuthorization(request),
+        workflowId,
+        idempotencyKey,
+      ),
+    };
+  }
+
   @Get('provisioning-operations/:operationId')
   async getOperation(
     @Req() request: AuthorizedRequest,

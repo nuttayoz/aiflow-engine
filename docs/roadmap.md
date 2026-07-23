@@ -287,6 +287,9 @@ Implemented Phase 3 slices:
 - Immutable workflow-version create/list/get APIs with optimistic edit context,
   idempotent creation, tenant/project authorization, audit facts, and typed
   client support for both direct-bearer and same-origin BFF composition.
+- Activation-state projection plus immediate, idempotent intake closure for the
+  current non-managed connectors, including operation serialization, audit
+  facts, stored replay results, and upload-gate smoke coverage.
 
 Exit criteria:
 

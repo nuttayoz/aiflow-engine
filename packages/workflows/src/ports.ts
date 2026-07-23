@@ -5,6 +5,7 @@ import type { ValidatedWorkflowDefinition } from './definition';
 export interface WorkflowRecord {
   readonly acceptingNewDocuments: boolean;
   readonly activeVersionId?: string;
+  readonly cleanupRequired: boolean;
   readonly createdAt: Date;
   readonly health: 'DEGRADED' | 'HEALTHY' | 'UNKNOWN';
   readonly id: string;
@@ -126,6 +127,24 @@ export interface RequestWorkflowActivationInput {
   readonly workflowId: string;
 }
 
+export interface RequestWorkflowDeactivationInput {
+  readonly actor: ActorIdentity;
+  readonly causationId: string;
+  readonly correlationId: string;
+  readonly idempotencyKey: string;
+  readonly projectId: string;
+  readonly tenantId: string;
+  readonly workflowId: string;
+}
+
+export interface WorkflowDeactivationResult {
+  readonly acceptingNewDocuments: boolean;
+  readonly activeVersionId?: string;
+  readonly cleanupRequired: boolean;
+  readonly health: WorkflowRecord['health'];
+  readonly workflowId: string;
+}
+
 export interface ClaimProvisioningOperationInput {
   readonly consumerName: string;
   readonly expectedStateVersion: number;
@@ -152,7 +171,14 @@ export interface WorkflowProvisioningRepository {
     tenantId: string,
     operationId: string,
   ): Promise<ProvisioningOperationRecord | undefined>;
+  findCurrentByWorkflow(
+    tenantId: string,
+    workflowId: string,
+  ): Promise<ProvisioningOperationRecord | undefined>;
   requestActivation(
     input: RequestWorkflowActivationInput,
   ): Promise<ProvisioningOperationRecord>;
+  requestDeactivation(
+    input: RequestWorkflowDeactivationInput,
+  ): Promise<WorkflowDeactivationResult>;
 }
