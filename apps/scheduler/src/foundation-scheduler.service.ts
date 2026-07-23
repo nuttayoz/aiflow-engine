@@ -17,6 +17,7 @@ import {
   PostgresOutboxRepository,
   PostgresPipelineRepository,
   PostgresSchedulerLeaseRepository,
+  PostgresSharePointIngestionRecoveryRepository,
   PostgresSharePointRecoveryRepository,
   PostgresUploadSessionRepository,
 } from '@aiflow/database';
@@ -74,6 +75,11 @@ export class FoundationSchedulerService
       this.database.dataSource,
       schema,
     );
+    const sharePointIngestionRecovery =
+      new PostgresSharePointIngestionRecoveryRepository(
+        this.database.dataSource,
+        schema,
+      );
     this.storage = new S3ObjectStorage(this.s3Config);
 
     this.loops = [
@@ -143,6 +149,7 @@ export class FoundationSchedulerService
         });
         if (lease === undefined) return;
         await sharePointRecovery.enqueueDueReconciliations(100);
+        await sharePointIngestionRecovery.recoverExpiredLeases(100);
       }),
     ];
   }

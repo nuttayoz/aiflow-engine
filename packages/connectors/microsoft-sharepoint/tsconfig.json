@@ -10,6 +10,7 @@
   "exclude": ["src/**/*.spec.ts"],
   "references": [
     { "path": "../../connector-sdk" },
+    { "path": "../../storage" },
     { "path": "../../workflows" }
   ]
 }

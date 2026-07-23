@@ -126,6 +126,29 @@ describe('S3 object storage contract', () => {
     ).resolves.toBeUndefined();
   });
 
+  it('computes a full-object checksum while streaming unknown provider bytes', async () => {
+    const body = Buffer.from('sharepoint-provider-stream');
+    const key = buildStorageObjectKey('tenant-sharepoint', randomUUID());
+
+    await expect(
+      storage.putImmutableStreaming({
+        contentLength: body.byteLength,
+        contentType: 'application/pdf',
+        key,
+        maximumBytes: 1024,
+        stream: Readable.from([body.subarray(0, 10), body.subarray(10)]),
+      }),
+    ).resolves.toMatchObject({
+      checksum: {
+        algorithm: 'SHA256',
+        type: 'FULL_OBJECT',
+        value: checksum(body),
+      },
+      key,
+      sizeBytes: body.byteLength,
+    });
+  });
+
   it('issues a short-lived checksum-bound single PUT capability', async () => {
     const body = Buffer.from('phase-two-browser-upload');
     const storageObjectId = randomUUID();

@@ -1,3 +1,5 @@
+import { Readable } from 'node:stream';
+
 import {
   SharePointGraphError,
   type SharePointGraphDeltaPage,
@@ -19,6 +21,11 @@ interface StoredSubscription extends SharePointGraphSubscription {
 export class FakeSharePointGraphAdapter implements SharePointGraphPort {
   private behavior: FakeSharePointGraphBehavior = 'SUCCEED';
   private readonly deltaPages = new Map<string, SharePointGraphDeltaPage>();
+  private readonly fileContents = new Map<string, Buffer>();
+  private readonly items = new Map<
+    string,
+    SharePointGraphDeltaPage['items'][number]
+  >();
   private readonly subscriptions = new Map<string, StoredSubscription>();
   private subscriptionSequence = 0;
 
@@ -40,6 +47,21 @@ export class FakeSharePointGraphAdapter implements SharePointGraphPort {
     page: SharePointGraphDeltaPage,
   ): void {
     this.deltaPages.set(this.deltaKey(connectionId, driveId, cursor), page);
+    for (const item of page.items) {
+      this.items.set(this.itemKey(connectionId, driveId, item.id), item);
+    }
+  }
+
+  setFileContent(
+    connectionId: string,
+    driveId: string,
+    itemId: string,
+    content: Uint8Array,
+  ): void {
+    this.fileContents.set(
+      this.itemKey(connectionId, driveId, itemId),
+      Buffer.from(content),
+    );
   }
 
   async resolveTarget(input: {
@@ -114,6 +136,26 @@ export class FakeSharePointGraphAdapter implements SharePointGraphPort {
       : undefined;
   }
 
+  async getItem(input: {
+    readonly connectionId: string;
+    readonly driveId: string;
+    readonly itemId: string;
+  }) {
+    this.failBeforeRead();
+    return (
+      this.items.get(
+        this.itemKey(input.connectionId, input.driveId, input.itemId),
+      ) ??
+      this.items.get(
+        this.itemKey(
+          FAKE_SHAREPOINT_ANY_CONNECTION_ID,
+          input.driveId,
+          input.itemId,
+        ),
+      )
+    );
+  }
+
   async listSubscriptions(input: {
     readonly connectionId: string;
   }): Promise<readonly SharePointGraphSubscription[]> {
@@ -123,6 +165,34 @@ export class FakeSharePointGraphAdapter implements SharePointGraphPort {
         (subscription) => subscription.connectionId === input.connectionId,
       )
       .map((subscription) => this.publicSubscription(subscription));
+  }
+
+  async openFileContent(input: {
+    readonly connectionId: string;
+    readonly driveId: string;
+    readonly itemId: string;
+  }) {
+    this.failBeforeRead();
+    const item = await this.getItem(input);
+    const content =
+      this.fileContents.get(
+        this.itemKey(input.connectionId, input.driveId, input.itemId),
+      ) ??
+      this.fileContents.get(
+        this.itemKey(
+          FAKE_SHAREPOINT_ANY_CONNECTION_ID,
+          input.driveId,
+          input.itemId,
+        ),
+      );
+    if (item?.kind !== 'FILE' || content === undefined) {
+      throw new SharePointGraphError('GRAPH_NOT_FOUND');
+    }
+    return {
+      contentLength: content.byteLength,
+      contentType: item.contentType ?? 'application/octet-stream',
+      stream: Readable.from(content),
+    };
   }
 
   async renewSubscription(input: {
@@ -195,6 +265,14 @@ export class FakeSharePointGraphAdapter implements SharePointGraphPort {
     cursor: string | undefined,
   ): string {
     return `${connectionId}\0${driveId}\0${cursor ?? 'initial'}`;
+  }
+
+  private itemKey(
+    connectionId: string,
+    driveId: string,
+    itemId: string,
+  ): string {
+    return `${connectionId}\0${driveId}\0${itemId}`;
   }
 
   private failBeforeMutation(): void {

@@ -9,6 +9,7 @@
   ],
   "dependencies": {
     "@aiflow/connector-sdk": "workspace:*",
+    "@aiflow/storage": "workspace:*",
     "@aiflow/workflows": "workspace:*"
   },
   "devDependencies": {

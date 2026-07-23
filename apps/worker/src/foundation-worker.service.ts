@@ -19,6 +19,7 @@ import {
   FAKE_SHAREPOINT_ANY_CONNECTION_ID,
   FakeSharePointGraphAdapter,
   microsoftSharePointConnector,
+  SharePointIngestionProcessor,
   SharePointManagedEntryProvisioner,
   SharePointSyncProcessor,
 } from '@aiflow/connector-microsoft-sharepoint';
@@ -28,6 +29,7 @@ import {
   DatabaseService,
   PostgresExecutionRepository,
   PostgresPipelineRepository,
+  PostgresSharePointIngestionRepository,
   PostgresSharePointProvisioningRepository,
   PostgresSharePointSyncRepository,
   PostgresWorkflowProvisioningRepository,
@@ -63,6 +65,7 @@ import {
 const MESSAGE_TYPES = [
   'aiflow.workflow.provisioning.requested.v1',
   'aiflow.connector.microsoft-sharepoint.watch.reconcile.requested.v1',
+  'aiflow.document.ingest.connector.microsoft-sharepoint.requested.v1',
   'aiflow.execution.stage.extract.requested.v1',
   'aiflow.execution.stage.map.requested.v1',
   'aiflow.execution.stage.reconcile.requested.v1',
@@ -87,6 +90,12 @@ interface SharePointSyncData extends Readonly<Record<string, unknown>> {
   readonly watchId: string;
 }
 
+interface SharePointIngestionData extends Readonly<Record<string, unknown>> {
+  readonly connectorId: 'microsoft-sharepoint';
+  readonly expectedStateVersion: number;
+  readonly ingestionId: string;
+}
+
 @Injectable()
 export class FoundationWorkerService
   implements MessageHandler, OnApplicationBootstrap, OnApplicationShutdown
@@ -98,6 +107,7 @@ export class FoundationWorkerService
   private mapping?: MappingProcessor;
   private pipeline?: PostgresPipelineRepository;
   private provisioning?: WorkflowProvisioningService;
+  private sharePointIngestion?: SharePointIngestionProcessor;
   private sharePointSync?: SharePointSyncProcessor;
   private delivery?: BusinessCentralDeliveryProcessor;
   private storage?: S3ObjectStorage;
@@ -136,7 +146,7 @@ export class FoundationWorkerService
     const extractionProvider = new FakeExtractionProvider();
     const businessCentral = new FakeBusinessCentralDestination();
     const sharePointRuntime = this.syntheticStagesEnabled
-      ? this.createFakeSharePointRuntime(schema)
+      ? this.createFakeSharePointRuntime(schema, this.storage)
       : undefined;
     this.extraction = new ExtractionProcessor(
       this.pipeline,
@@ -178,6 +188,7 @@ export class FoundationWorkerService
       ]),
       sharePointRuntime === undefined ? [] : [sharePointRuntime.provisioner],
     );
+    this.sharePointIngestion = sharePointRuntime?.ingestion;
     this.sharePointSync = sharePointRuntime?.sync;
 
     await Promise.all(
@@ -197,15 +208,23 @@ export class FoundationWorkerService
           ? await this.handleSharePointSync(
               envelope as MessageEnvelope<SharePointSyncData>,
             )
-          : envelope.type === 'aiflow.workflow.provisioning.requested.v1'
-            ? await this.handleProvisioning(
-                envelope as MessageEnvelope<ProvisioningData>,
+          : envelope.type ===
+              'aiflow.document.ingest.connector.microsoft-sharepoint.requested.v1'
+            ? await this.handleSharePointIngestion(
+                envelope as MessageEnvelope<SharePointIngestionData>,
               )
-            : envelope.type === 'aiflow.execution.stage.reconcile.requested.v1'
-              ? await this.handleReconciliation(
-                  envelope as MessageEnvelope<StageData>,
+            : envelope.type === 'aiflow.workflow.provisioning.requested.v1'
+              ? await this.handleProvisioning(
+                  envelope as MessageEnvelope<ProvisioningData>,
                 )
-              : await this.handleStage(envelope as MessageEnvelope<StageData>);
+              : envelope.type ===
+                  'aiflow.execution.stage.reconcile.requested.v1'
+                ? await this.handleReconciliation(
+                    envelope as MessageEnvelope<StageData>,
+                  )
+                : await this.handleStage(
+                    envelope as MessageEnvelope<StageData>,
+                  );
       this.telemetry.recordMessage(envelope.type, outcome);
       return outcome;
     } catch (error) {
@@ -247,6 +266,26 @@ export class FoundationWorkerService
       projectId: envelope.projectId,
       tenantId: envelope.tenantId,
       watchId: envelope.data.watchId,
+    });
+    return outcome === 'STALE' ? 'STALE' : 'CLAIMED';
+  }
+
+  private async handleSharePointIngestion(
+    envelope: MessageEnvelope<SharePointIngestionData>,
+  ): Promise<MessageHandlingOutcome> {
+    if (this.sharePointIngestion === undefined) {
+      throw new Error('SHAREPOINT_GRAPH_ADAPTER_NOT_CONFIGURED');
+    }
+    const outcome = await this.sharePointIngestion.process({
+      consumerName: this.consumerName,
+      expectedStateVersion: envelope.data.expectedStateVersion,
+      ingestionId: envelope.data.ingestionId,
+      leaseDurationMs: 30_000,
+      leaseOwner: this.consumerName,
+      messageId: envelope.messageId,
+      messageType: envelope.type,
+      projectId: envelope.projectId,
+      tenantId: envelope.tenantId,
     });
     return outcome === 'STALE' ? 'STALE' : 'CLAIMED';
   }
@@ -343,7 +382,11 @@ export class FoundationWorkerService
     return this.mapping;
   }
 
-  private createFakeSharePointRuntime(schema: string): {
+  private createFakeSharePointRuntime(
+    schema: string,
+    storage: S3ObjectStorage,
+  ): {
+    readonly ingestion: SharePointIngestionProcessor;
     readonly provisioner: SharePointManagedEntryProvisioner;
     readonly sync: SharePointSyncProcessor;
   } {
@@ -382,6 +425,14 @@ export class FoundationWorkerService
       cursorProtector,
     );
     return {
+      ingestion: new SharePointIngestionProcessor(
+        new PostgresSharePointIngestionRepository(
+          this.database.dataSource,
+          schema,
+        ),
+        graph,
+        storage,
+      ),
       provisioner: new SharePointManagedEntryProvisioner(
         repository,
         graph,

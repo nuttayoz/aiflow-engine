@@ -150,6 +150,7 @@
       "version": "0.1.0",
       "dependencies": {
         "@aiflow/connector-sdk": "workspace:*",
+        "@aiflow/storage": "workspace:*",
         "@aiflow/workflows": "workspace:*",
       },
       "devDependencies": {

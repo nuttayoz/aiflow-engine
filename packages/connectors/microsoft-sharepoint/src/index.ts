@@ -7,6 +7,7 @@ export * from './client-state';
 export * from './configuration';
 export * from './fake-graph';
 export * from './graph-port';
+export * from './ingestion';
 export * from './notification';
 export * from './provisioning';
 export * from './protection';

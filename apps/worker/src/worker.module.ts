@@ -42,6 +42,7 @@ export class WorkerModule {
           bindings: [
             ...CORE_QUEUE_BINDINGS,
             connectorQueueBinding('microsoft-business-central', 'deliver'),
+            connectorQueueBinding('microsoft-sharepoint', 'ingest'),
             connectorQueueBinding('microsoft-sharepoint', 'sync'),
             connectorQueueBinding('phase1-synthetic', 'deliver'),
           ],

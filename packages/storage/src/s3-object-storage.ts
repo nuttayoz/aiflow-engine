@@ -27,6 +27,7 @@ import type {
   CreateSinglePutCapabilityInput,
   ObjectStoragePort,
   PutObjectInput,
+  PutStreamingObjectInput,
   ReadObjectInput,
   UploadCapability,
 } from './port';
@@ -262,6 +263,72 @@ export class S3ObjectStorage
       metadata.checksum.type !== input.checksum.type ||
       (input.contentLength !== undefined &&
         metadata.sizeBytes !== input.contentLength)
+    ) {
+      throw new Error('STORAGE_INTEGRITY_MISMATCH');
+    }
+    return metadata;
+  }
+
+  async putImmutableStreaming(
+    input: PutStreamingObjectInput,
+  ): Promise<StoredObjectMetadata> {
+    assertLocation(input.key);
+    assertContentLength(input.contentLength);
+    assertContentType(input.contentType);
+    if (
+      !Number.isSafeInteger(input.maximumBytes) ||
+      input.maximumBytes < input.contentLength
+    ) {
+      throw new Error('STORAGE_MAXIMUM_BYTES_INVALID');
+    }
+    const hash = createHash('sha256');
+    let receivedBytes = 0;
+    const verifier = new Transform({
+      flush(callback) {
+        callback(
+          receivedBytes === input.contentLength
+            ? undefined
+            : new Error('STORAGE_CONTENT_LENGTH_MISMATCH'),
+        );
+      },
+      transform(chunk: Buffer, _encoding, callback) {
+        receivedBytes += chunk.byteLength;
+        if (receivedBytes > input.maximumBytes) {
+          callback(new Error('STORAGE_MAXIMUM_BYTES_EXCEEDED'));
+          return;
+        }
+        hash.update(chunk);
+        callback(undefined, chunk);
+      },
+    });
+    const response = await this.client.send(
+      new PutObjectCommand({
+        Body: input.stream.pipe(verifier),
+        Bucket: this.config.bucket,
+        ChecksumAlgorithm: 'SHA256',
+        ContentLength: input.contentLength,
+        ContentType: input.contentType,
+        IfNoneMatch: '*',
+        Key: input.key,
+        ...(this.config.kmsKeyId === undefined
+          ? {}
+          : { SSEKMSKeyId: this.config.kmsKeyId }),
+        ServerSideEncryption: this.config.encryptionMode,
+      }),
+    );
+    if (response.VersionId === undefined || response.VersionId.length === 0) {
+      throw new Error('STORAGE_VERSION_MISSING');
+    }
+    const expectedChecksum = hash.digest('base64');
+    const metadata = await this.headExactVersion({
+      key: input.key,
+      versionId: response.VersionId,
+    });
+    if (
+      metadata === undefined ||
+      metadata.sizeBytes !== input.contentLength ||
+      metadata.checksum.type !== 'FULL_OBJECT' ||
+      metadata.checksum.value !== expectedChecksum
     ) {
       throw new Error('STORAGE_INTEGRITY_MISMATCH');
     }
@@ -525,6 +592,7 @@ export class S3ObjectStorage
           : undefined);
       const rawChecksumType =
         response.ChecksumType ??
+        (response.ChecksumSHA256 === undefined ? undefined : 'FULL_OBJECT') ??
         (this.config.allowChecksumMetadataFallback ? fallback.type : undefined);
       if (
         response.VersionId === undefined ||

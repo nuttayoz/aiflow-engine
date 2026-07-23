@@ -1,3 +1,5 @@
+import type { Readable } from 'node:stream';
+
 export const SHAREPOINT_SUBSCRIPTION_MAX_LIFETIME_MINUTES = 42_300;
 
 export interface SharePointGraphTarget {
@@ -84,6 +86,11 @@ export interface SharePointGraphPort {
     readonly connectionId: string;
     readonly subscriptionId: string;
   }): Promise<SharePointGraphSubscription | undefined>;
+  getItem(input: {
+    readonly connectionId: string;
+    readonly driveId: string;
+    readonly itemId: string;
+  }): Promise<SharePointGraphItem | undefined>;
   listDeltaPage(input: {
     readonly connectionId: string;
     readonly cursor?: string;
@@ -92,6 +99,15 @@ export interface SharePointGraphPort {
   listSubscriptions(input: {
     readonly connectionId: string;
   }): Promise<readonly SharePointGraphSubscription[]>;
+  openFileContent(input: {
+    readonly connectionId: string;
+    readonly driveId: string;
+    readonly itemId: string;
+  }): Promise<{
+    readonly contentLength: number;
+    readonly contentType: string;
+    readonly stream: Readable;
+  }>;
   renewSubscription(input: {
     readonly connectionId: string;
     readonly expiresAt: Date;

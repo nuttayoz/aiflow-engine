@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { resolve } from 'node:path';
 
 import {
@@ -15,10 +15,12 @@ import {
 import {
   AesGcmSharePointCursorProtector,
   FakeSharePointGraphAdapter,
+  SharePointIngestionProcessor,
   SharePointManagedEntryProvisioner,
   SharePointSyncProcessor,
 } from '@aiflow/connector-microsoft-sharepoint';
 import type { ValidatedWorkflowDefinition } from '@aiflow/workflows';
+import type { ObjectStoragePort } from '@aiflow/storage';
 
 import {
   createApplicationDataSource,
@@ -36,7 +38,11 @@ import {
 } from './scheduler.repository';
 import { PostgresSharePointRepository } from './sharepoint.repository';
 import { PostgresSharePointProvisioningRepository } from './sharepoint-provisioning.repository';
-import { PostgresSharePointRecoveryRepository } from './sharepoint-recovery.repository';
+import {
+  PostgresSharePointIngestionRecoveryRepository,
+  PostgresSharePointRecoveryRepository,
+} from './sharepoint-recovery.repository';
+import { PostgresSharePointIngestionRepository } from './sharepoint-ingestion.repository';
 import { PostgresSharePointSyncRepository } from './sharepoint-sync.repository';
 import { PostgresStorageObjectRepository } from './storage-object.repository';
 import { PostgresWorkflowProvisioningRepository } from './workflow-provisioning.repository';
@@ -1337,6 +1343,225 @@ describe('PostgreSQL foundation', () => {
     expect(
       cursorProtector.unprotect(synced!.committed_delta_cursor_ciphertext),
     ).toBe('confidential-next-delta-cursor');
+
+    const fileContent = Buffer.alloc(456, 7);
+    graph.setFileContent(
+      connectionId,
+      target.driveId,
+      'new-file-1',
+      fileContent,
+    );
+    const [ingestion] = (await runtimeDataSource.query(
+      `
+        SELECT id, state_version
+        FROM aiflow.document_ingestions
+        WHERE tenant_id = $1 AND watch_id = $2
+      `,
+      [tenantId, watchIdentity!.id],
+    )) as { id: string; state_version: number | string }[];
+    const objectStorage = {
+      deleteExactVersion: jest.fn(),
+      putImmutableStreaming: jest
+        .fn()
+        .mockImplementation(
+          async (input: {
+            contentLength: number;
+            contentType: string;
+            key: string;
+            stream: AsyncIterable<Buffer | Uint8Array>;
+          }) => {
+            const chunks: Buffer[] = [];
+            for await (const chunk of input.stream) {
+              chunks.push(Buffer.from(chunk));
+            }
+            const uploaded = Buffer.concat(chunks);
+            expect(uploaded).toEqual(fileContent);
+            return {
+              checksum: {
+                algorithm: 'SHA256' as const,
+                type: 'FULL_OBJECT' as const,
+                value: createHash('sha256').update(uploaded).digest('base64'),
+              },
+              contentType: input.contentType,
+              encryptionMode: 'AES256',
+              key: input.key,
+              sizeBytes: input.contentLength,
+              versionId: 'fake-s3-version-1',
+            };
+          },
+        ),
+    } as unknown as ObjectStoragePort;
+    await expect(
+      new SharePointIngestionProcessor(
+        new PostgresSharePointIngestionRepository(
+          runtimeDataSource,
+          runtimeConfig.schema,
+        ),
+        graph,
+        objectStorage,
+      ).process({
+        consumerName: 'sharepoint-ingest-worker',
+        expectedStateVersion: Number(ingestion!.state_version),
+        ingestionId: ingestion!.id,
+        leaseDurationMs: 30_000,
+        leaseOwner: 'sharepoint-ingest-worker',
+        messageId: randomUUID(),
+        messageType:
+          'aiflow.document.ingest.connector.microsoft-sharepoint.requested.v1',
+        projectId,
+        tenantId,
+      }),
+    ).resolves.toBe('PROCESSED');
+    const [staged] = (await runtimeDataSource.query(
+      `
+        SELECT
+          ingestion.status AS ingestion_status,
+          storage.status AS storage_status,
+          execution.status AS execution_status,
+          document.source_connector_id,
+          (
+            SELECT count(*)::int
+            FROM aiflow.outbox_messages AS outbox
+            WHERE outbox.tenant_id = ingestion.tenant_id
+              AND outbox.aggregate_type = 'EXECUTION'
+              AND outbox.aggregate_id = execution.id::text
+          ) AS extraction_outbox_count
+        FROM aiflow.document_ingestions AS ingestion
+        JOIN aiflow.storage_objects AS storage
+          ON storage.tenant_id = ingestion.tenant_id
+         AND storage.id = ingestion.storage_object_id
+        JOIN aiflow.documents AS document
+          ON document.tenant_id = ingestion.tenant_id
+         AND document.id = ingestion.document_id
+        JOIN aiflow.executions AS execution
+          ON execution.tenant_id = ingestion.tenant_id
+         AND execution.id = ingestion.execution_id
+        WHERE ingestion.tenant_id = $1 AND ingestion.id = $2
+      `,
+      [tenantId, ingestion!.id],
+    )) as {
+      execution_status: string;
+      extraction_outbox_count: number;
+      ingestion_status: string;
+      source_connector_id: string;
+      storage_status: string;
+    }[];
+    expect(staged).toEqual({
+      execution_status: 'QUEUED',
+      extraction_outbox_count: 1,
+      ingestion_status: 'SUCCEEDED',
+      source_connector_id: 'microsoft-sharepoint',
+      storage_status: 'AVAILABLE',
+    });
+
+    const recoveryIngestionId = randomUUID();
+    const recoveryStorageObjectId = randomUUID();
+    await runtimeDataSource.query(
+      `
+        INSERT INTO aiflow.storage_objects (
+          id,
+          tenant_id,
+          project_id,
+          kind,
+          status,
+          location_alias,
+          object_key,
+          retention_until
+        ) VALUES (
+          $1, $2, $3, 'SOURCE_DOCUMENT', 'RESERVED', 'PRIMARY', $4,
+          clock_timestamp() + interval '30 days'
+        )
+      `,
+      [
+        recoveryStorageObjectId,
+        tenantId,
+        projectId,
+        `recovery/${recoveryStorageObjectId}`,
+      ],
+    );
+    await runtimeDataSource.query(
+      `
+        INSERT INTO aiflow.document_ingestions (
+          id,
+          tenant_id,
+          project_id,
+          connector_provisioning_binding_id,
+          watch_id,
+          workflow_id,
+          workflow_version_id,
+          connector_id,
+          drive_id,
+          item_id,
+          source_version_kind,
+          source_version,
+          status,
+          state_version,
+          attempt_count,
+          lease_owner,
+          lease_expires_at,
+          storage_object_id
+        ) VALUES (
+          $1, $2, $3, $4, $5, $6, $7,
+          'microsoft-sharepoint', $8, 'new-file-1', 'CTAG',
+          'recovery-file-ctag', 'RUNNING', 1, 1,
+          'expired-sharepoint-worker',
+          clock_timestamp() - interval '1 second',
+          $9
+        )
+      `,
+      [
+        recoveryIngestionId,
+        tenantId,
+        projectId,
+        prepared.bindingId,
+        watchIdentity!.id,
+        workflowId,
+        workflowVersionId,
+        target.driveId,
+        recoveryStorageObjectId,
+      ],
+    );
+    await expect(
+      new PostgresSharePointIngestionRecoveryRepository(
+        runtimeDataSource,
+        runtimeConfig.schema,
+      ).recoverExpiredLeases(100),
+    ).resolves.toBe(1);
+    const [recovered] = (await runtimeDataSource.query(
+      `
+        SELECT
+          ingestion.status AS ingestion_status,
+          ingestion.failure_code,
+          ingestion.storage_object_id,
+          storage.status AS storage_status,
+          (
+            SELECT count(*)::int
+            FROM aiflow.outbox_messages AS outbox
+            WHERE outbox.tenant_id = ingestion.tenant_id
+              AND outbox.aggregate_type = 'DOCUMENT_INGESTION'
+              AND outbox.aggregate_id = ingestion.id::text
+          ) AS retry_outbox_count
+        FROM aiflow.document_ingestions AS ingestion
+        JOIN aiflow.storage_objects AS storage
+          ON storage.tenant_id = ingestion.tenant_id
+         AND storage.id = $3
+        WHERE ingestion.tenant_id = $1 AND ingestion.id = $2
+      `,
+      [tenantId, recoveryIngestionId, recoveryStorageObjectId],
+    )) as {
+      failure_code: string;
+      ingestion_status: string;
+      retry_outbox_count: number;
+      storage_object_id: null | string;
+      storage_status: string;
+    }[];
+    expect(recovered).toEqual({
+      failure_code: 'SHAREPOINT_INGESTION_LEASE_EXPIRED',
+      ingestion_status: 'WAITING_RETRY',
+      retry_outbox_count: 1,
+      storage_object_id: null,
+      storage_status: 'ABANDONED',
+    });
 
     await runtimeDataSource.query(
       `
