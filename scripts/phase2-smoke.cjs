@@ -224,30 +224,31 @@ const main = async () => {
     throw new Error('SMOKE_UPLOAD_PLAN_UNEXPECTED');
   }
   const uploadHeaderNames = Object.keys(upload.plan.headers).join(',');
-  const preflight = await fetch(upload.plan.url, {
-    headers: {
-      'Access-Control-Request-Headers': uploadHeaderNames,
-      'Access-Control-Request-Method': 'PUT',
-      Origin: 'http://localhost:4173',
-    },
-    method: 'OPTIONS',
-  });
-  const allowedHeaders = preflight.headers
-    .get('access-control-allow-headers')
-    ?.toLowerCase();
-  if (
-    !preflight.ok ||
-    preflight.headers.get('access-control-allow-origin') !==
-      'http://localhost:4173' ||
-    Object.keys(upload.plan.headers).some(
-      (header) =>
-        !allowedHeaders
-          ?.split(',')
-          .map((item) => item.trim())
-          .includes(header),
-    )
-  ) {
-    throw new Error('SMOKE_STORAGE_CORS_PREFLIGHT_FAILED');
+  for (const origin of ['http://localhost:3001', 'http://localhost:4173']) {
+    const preflight = await fetch(upload.plan.url, {
+      headers: {
+        'Access-Control-Request-Headers': uploadHeaderNames,
+        'Access-Control-Request-Method': 'PUT',
+        Origin: origin,
+      },
+      method: 'OPTIONS',
+    });
+    const allowedHeaders = preflight.headers
+      .get('access-control-allow-headers')
+      ?.toLowerCase();
+    if (
+      !preflight.ok ||
+      preflight.headers.get('access-control-allow-origin') !== origin ||
+      Object.keys(upload.plan.headers).some(
+        (header) =>
+          !allowedHeaders
+            ?.split(',')
+            .map((item) => item.trim())
+            .includes(header),
+      )
+    ) {
+      throw new Error('SMOKE_STORAGE_CORS_PREFLIGHT_FAILED');
+    }
   }
   const transfer = await fetch(upload.plan.url, {
     body: document,
