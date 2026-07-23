@@ -1,10 +1,29 @@
 # Microsoft SharePoint Entry Contract v1
 
-Status: Phase 0B proposal for Phase 4 implementation.
+Status: Phase 4 implementation baseline. The local provider boundary is proven;
+production Graph identity, HTTP, consent, and platform controls remain gated.
 
 This contract defines how AiFlow Engine discovers new documents in Microsoft SharePoint Online, stages their bytes in engine-managed object storage, and starts the same provider-neutral execution used by direct upload. It covers Microsoft Graph connection and permission boundaries, workflow configuration, shared subscriptions, webhook handling, delta reconciliation, source-version deduplication, renewal, recovery, and scaling.
 
 It does not add a SharePoint execution state, send documents through an API, or implement a SharePoint destination action. A future destination action needs its own write/idempotency contract.
+
+## Implementation status
+
+The engine now implements the managed-entry descriptor, durable binding/watch/
+scope/inventory/notification/ingestion model, strict callback intake,
+provisioning and baseline, delta reconciliation, subscription renewal,
+Graph-to-S3 streaming, source-version deduplication, lease recovery, scheduled
+backstop, and the normal document execution handoff.
+
+The existing DevPortal journey can configure a SharePoint connection and
+workflow with stable IDs and show the resulting execution. A deterministic fake
+Graph adapter proves the complete local path and is unavailable in production.
+The approved real Graph identity/HTTP adapter, resource browsing, full
+deactivation/handover cleanup, cursor reset and subtree reconciliation,
+per-tenant admission fairness, retention cleanup, and production load/security
+evidence remain release gates. See
+[`../security/sharepoint-entry-review.md`](../security/sharepoint-entry-review.md)
+for the explicit findings.
 
 ## Legacy evidence and target
 

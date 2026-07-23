@@ -11,14 +11,18 @@ This roadmap controls implementation order. A phase starts only after its entry 
 | Phase 1  | Reliable engine foundation         | Code complete |
 | Phase 2  | Direct-upload proof and demo       | Complete      |
 | Phase 3  | Existing DevPortal compatibility   | Complete      |
-| Phase 4  | SharePoint entry and destination   | Not started   |
+| Phase 4  | SharePoint entry                   | Core complete |
 | Phase 5  | Templates and review               | Not started   |
 | Phase 6  | Migration, cutover, and retirement | Not started   |
 
-Phase 3 is complete and locally proven through the real DevPortal BFF, engine
-runtime roles, PostgreSQL, RabbitMQ, and S3-compatible storage. Production
-cutover still requires the deployment-owned OIDC/project-authorization and
-provider adapters. Phase 4 and later product behavior is not implemented.
+Phase 3 is complete and locally proven through the real DevPortal BFF. The
+Phase 4 SharePoint engine path is locally proven through public APIs and real
+runtime roles; its DevPortal integration is implemented and covered by frontend
+tests, with the signed-in browser acceptance journey documented below.
+Production cutover still requires deployment-owned identity, authorization,
+real Microsoft provider adapters, and the release gates listed below.
+SharePoint destination behavior was not requested and remains a separate future
+connector action.
 
 ## Phase 0A: repository skeleton
 
@@ -335,30 +339,81 @@ Exit criteria:
 - No n8n workflow, user, credential, tag, or database record is created for a new workflow.
 - Legacy compatibility names do not appear in engine-core entities.
 
-## Phase 4: SharePoint entry and destination
+## Phase 4: SharePoint entry
 
 Purpose: support automatic document entry from Microsoft while converging on the same `DOCUMENT_STAGED` boundary.
 
 Contract: [`contracts/sharepoint-entry-v1.md`](contracts/sharepoint-entry-v1.md).
 
-Scope:
+Status: core entry implementation and local engine proof complete; signed-in
+DevPortal acceptance plus production provider/platform validation pending.
 
-- Microsoft connection and consent flow.
-- Site, drive/library, and folder selection.
-- Subscription provisioning, renewal, and health status.
-- Notification validation, deduplication, durable persistence, and fast acknowledgement.
-- SharePoint ingestion worker with Graph-to-S3 streaming.
-- Source identity/eTag deduplication and delta reconciliation.
-- Graph throttling and per-connection concurrency controls.
-- SharePoint destination actions where required.
+Implemented:
+
+- A provider-neutral managed entry descriptor and SharePoint `watch-folder`
+  configuration using stable site, drive, and folder identifiers.
+- Durable workflow bindings, shared drive watches, folder scopes, item
+  inventory, callback events, source-version ingestions, encrypted delta
+  cursors, leases, and state-version guards.
+- A strict public Graph callback with validation challenge handling, bounded
+  payload parsing, `clientState` verification, deduplication, coalescing, and
+  fast durable acknowledgement.
+- Drive-root subscription provisioning, metadata-only baseline, renewal,
+  scheduled delta backstop, last-occurrence-wins delta processing, recursive
+  folder scope matching, and effectively-once ingestion intent creation.
+- Separate SharePoint sync and ingestion queues from one repository/image, so
+  Kubernetes can scale metadata and streaming workloads independently.
+- Graph-to-S3 streaming with bounded memory, exact source-version identity,
+  checksum validation, immutable storage reservations, and the same
+  `DOCUMENT_STAGED -> EXTRACT -> MAP -> REVIEW -> DELIVER` path as direct
+  upload.
+- Lease expiry recovery, notification replay protection, source metadata
+  revalidation, and duplicate source-version suppression.
+- DevPortal connection and workflow-builder support for SharePoint entry, plus
+  managed-entry execution status in the existing workflow journey.
+- A deterministic non-production Graph fake and `bun run phase4:smoke` proof.
+  Production composition fails closed without an approved real Graph adapter.
+
+Production release gates:
+
+- Implement and sandbox-prove the approved Microsoft Entra app-only identity,
+  customer admin-consent, least-privilege permission, token, Graph HTTP, and
+  download-redirect adapters.
+- Add provider resource discovery so the UI can browse
+  site -> drive/library -> folder instead of requiring IDs.
+- Complete deactivation, shared-watch last-reference cleanup, version handover,
+  cursor reset/rebaseline, and subtree move reconciliation.
+- Reconcile or delete an orphaned S3 object after a crash between provider
+  upload and database commit.
+- Add ingress/egress controls, per-tenant/connection admission fairness, Graph
+  throttling behavior, production metrics/alerts, and the agreed retention
+  jobs.
+- Pass production-equivalent consent, callback burst, missed-event, large-file,
+  crash, tenant-fairness, and Graph throttling tests.
+- Close the findings in
+  [`security/sharepoint-entry-review.md`](security/sharepoint-entry-review.md).
+
+Deferred:
+
+- SharePoint destination actions. Entry and destination are independent
+  capabilities; no required destination action has yet been confirmed.
 
 Exit criteria:
 
-- A new SharePoint document enters the same Phase 2 processing pipeline after staging.
-- Duplicate notifications do not create duplicate document versions or destination effects.
-- Missed notifications are recovered with delta reconciliation.
-- Subscription expiry and renewal failures are visible and recoverable.
-- Load tests cover provider throttling, tenant fairness, bursts, and large documents.
+- Local/non-production engine: complete. A file appearing after the baseline
+  enters the normal pipeline once, reaches the configured destination, and
+  survives notification/delta replay without a duplicate execution.
+- DevPortal: implementation and automated frontend tests complete; the signed-in
+  manual acceptance walkthrough remains for the product owner.
+- Production: pending until every production release gate above is demonstrated
+  against a real Microsoft sandbox and the deployment platform.
+
+Verification:
+
+- `bun run check`
+- `bun run test:integration`
+- `bun run phase4:smoke`
+- [`operations/phase4-sharepoint-demo.md`](operations/phase4-sharepoint-demo.md)
 
 ## Phase 5: templates and review
 

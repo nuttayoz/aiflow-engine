@@ -1,11 +1,11 @@
 # AiFlow Engine
 
 AiFlow Engine is the single replacement repository for the n8n-based AiFlow
-runtime services. Phase 2 provides a runnable direct-upload proof: canonical
-APIs, immutable S3 staging, fake external OCR, deterministic mapping, and one
-effective-once Microsoft Business Central draft action. SharePoint, human
-review, real provider adapters, and the existing DevPortal migration remain in
-later roadmap phases.
+runtime services. Direct upload and SharePoint entry now converge on the same
+immutable S3 staging and execution pipeline, with deterministic non-production
+OCR and Microsoft Business Central adapters. The existing DevPortal journey is
+compatible with both entry modes. Human review, real production provider
+adapters, and migration/cutover remain in later roadmap work.
 
 The existing `devportal-frontend` repository is not part of this repository and
 will not be rebuilt. Its AiFlow screens call this engine's canonical APIs
@@ -63,6 +63,17 @@ The smoke command starts isolated API, worker, and scheduler processes, creates
 and activates an invoice workflow through `/api/v1`, uploads a small document
 directly to local S3, and waits for EXTRACT, MAP, and Business Central DELIVER to
 succeed. Document bytes do not pass through the API, PostgreSQL, or RabbitMQ.
+
+To prove the automatic SharePoint-entry path with the deterministic local
+provider:
+
+```bash
+bun run phase4:smoke
+```
+
+See the [Phase 4 SharePoint runbook](docs/operations/phase4-sharepoint-demo.md)
+and
+[security/readiness review](docs/security/sharepoint-entry-review.md).
 
 To use the disposable DevPortal-shaped browser harness, keep the three runtime
 roles above running and start:
