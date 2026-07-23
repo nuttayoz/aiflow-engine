@@ -415,6 +415,44 @@ export class FoundationWorkerService
         },
       ],
     });
+    const demoDocument = Buffer.from(
+      '%PDF-1.4\nAiFlow local SharePoint entry proof\n%%EOF\n',
+    );
+    graph.setDeltaPage(
+      target.connectionId,
+      target.driveId,
+      'fake-baseline-delta-cursor',
+      {
+        finalCursor: 'fake-live-delta-cursor',
+        items: [
+          {
+            cTag: 'fake-demo-document-ctag',
+            contentType: 'application/pdf',
+            eTag: 'fake-demo-document-etag',
+            id: 'fake-demo-document',
+            kind: 'FILE',
+            name: 'sharepoint-demo.pdf',
+            parentId: target.folderId,
+            sizeBytes: demoDocument.byteLength,
+          },
+        ],
+      },
+    );
+    graph.setDeltaPage(
+      target.connectionId,
+      target.driveId,
+      'fake-live-delta-cursor',
+      {
+        finalCursor: 'fake-live-delta-cursor',
+        items: [],
+      },
+    );
+    graph.setFileContent(
+      target.connectionId,
+      target.driveId,
+      'fake-demo-document',
+      demoDocument,
+    );
     const cursorProtector = new AesGcmSharePointCursorProtector(
       [key],
       this.sharePointConfig.currentKeyVersion,
