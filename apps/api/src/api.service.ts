@@ -9,6 +9,7 @@ import {
 
 import { microsoftBusinessCentralConnector } from '@aiflow/connector-microsoft-business-central';
 import { directUploadConnector } from '@aiflow/connector-direct-upload';
+import { microsoftSharePointConnector } from '@aiflow/connector-microsoft-sharepoint';
 import {
   ConnectorRegistry,
   type ConnectorDescriptor,
@@ -205,6 +206,7 @@ export class ApiService
   private readonly connectors = new ConnectorRegistry([
     directUploadConnector,
     microsoftBusinessCentralConnector,
+    microsoftSharePointConnector,
   ]);
   private readonly validator = new WorkflowDefinitionValidator(
     this.connectors,
