@@ -293,6 +293,9 @@ Implemented Phase 3 slices:
 - Archive-only workflow removal with inactive/provisioning/cleanup guards,
   retained history, idempotent audit behavior, normal-list filtering, and typed
   client/smoke coverage.
+- Connector and extraction-profile list/detail catalogs with capability
+  filtering, stable safe projections, explicit lookup errors, and typed client
+  support for the existing wizard.
 
 Exit criteria:
 

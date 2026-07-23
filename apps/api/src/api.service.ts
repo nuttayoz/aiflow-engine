@@ -9,7 +9,10 @@ import {
 
 import { microsoftBusinessCentralConnector } from '@aiflow/connector-microsoft-business-central';
 import { directUploadConnector } from '@aiflow/connector-direct-upload';
-import { ConnectorRegistry } from '@aiflow/connector-sdk';
+import {
+  ConnectorRegistry,
+  type ConnectorDescriptor,
+} from '@aiflow/connector-sdk';
 import type { S3RuntimeConfig } from '@aiflow/config';
 import {
   DatabaseService,
@@ -23,6 +26,7 @@ import type { ExecutionRecord } from '@aiflow/executions';
 import {
   InMemoryExtractionProfileCatalog,
   PHASE2_INVOICE_PROFILE,
+  type ExtractionProfileDescriptor,
   verifyExtractionCallback,
 } from '@aiflow/extraction';
 import {
@@ -208,12 +212,28 @@ export class ApiService
     this.storage?.close();
   }
 
-  connectorCatalog(): readonly unknown[] {
-    return this.connectors.descriptors();
+  connectorCatalog(capability?: string): readonly ConnectorDescriptor[] {
+    if (capability === undefined) return this.connectors.descriptors();
+    if (capability !== 'ENTRY' && capability !== 'DESTINATION') {
+      throw new Error('CONNECTOR_CAPABILITY_INVALID');
+    }
+    return this.connectors.descriptorsWithCapability(capability);
   }
 
-  extractionProfileCatalog(): readonly unknown[] {
+  connectorDescriptor(connectorId: string): ConnectorDescriptor {
+    const descriptor = this.connectors.get(connectorId)?.descriptor;
+    if (descriptor === undefined) throw new Error('CONNECTOR_NOT_FOUND');
+    return descriptor;
+  }
+
+  extractionProfileCatalog(): readonly ExtractionProfileDescriptor[] {
     return profiles.list();
+  }
+
+  extractionProfileDescriptor(profileId: string): ExtractionProfileDescriptor {
+    const profile = profiles.find(profileId);
+    if (profile === undefined) throw new Error('EXTRACTION_PROFILE_NOT_FOUND');
+    return profile;
   }
 
   async createWorkflow(

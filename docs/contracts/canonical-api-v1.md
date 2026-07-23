@@ -379,6 +379,18 @@ by the provisioning contract.
 
 Connection responses never expose refresh tokens, client secrets, encrypted provider blobs, presigned URLs, or raw secret-manager references.
 
+`GET /api/v1/connectors` accepts an optional `capability=ENTRY|DESTINATION`
+filter. The list and detail projections contain the same immutable installed
+descriptor fields, including connector/action versions and safe configuration
+schemas. Unknown connector/profile identifiers return `404`; an unsupported
+capability filter returns `400 CONNECTOR_CAPABILITY_INVALID`.
+
+The initial built-in extraction-profile projection contains a safe
+`displayName`, stable profile/version identifiers, profile kind, output-field
+paths, and output-schema hash. Tenant-authored custom profiles join the same
+authorized list in Phase 5; provider endpoints, model identifiers, credentials,
+and secret configuration never appear in either projection.
+
 ### Custom extraction-template endpoints
 
 | Method and path                                                    | Purpose                                          |

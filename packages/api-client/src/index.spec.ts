@@ -28,6 +28,46 @@ const jsonResponse = (data: unknown): Response =>
 describe('DevPortal canonical API client boundary', () => {
   afterEach(() => jest.restoreAllMocks());
 
+  it('lists and reads connector and extraction-profile catalogs', async () => {
+    const connector = {
+      actions: [],
+      connectorId: 'direct-upload',
+      displayName: 'Direct upload',
+      version: 1,
+    };
+    const profile = {
+      displayName: 'Basic invoice',
+      outputFields: ['invoice_number'],
+      outputSchemaHash: 'schema-hash',
+      profileId: 'invoice-basic',
+      profileKind: 'SYSTEM',
+      profileVersionId: 'invoice-basic-v1',
+    };
+    const fetchMock = jest
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(jsonResponse([connector]))
+      .mockResolvedValueOnce(jsonResponse(connector))
+      .mockResolvedValueOnce(jsonResponse([profile]))
+      .mockResolvedValueOnce(jsonResponse(profile));
+    const client = new AiFlowClient('https://engine.example', () => 'token-1');
+
+    await expect(client.listConnectors('ENTRY')).resolves.toEqual([connector]);
+    await expect(client.getConnector('direct-upload')).resolves.toEqual(
+      connector,
+    );
+    await expect(client.listExtractionProfiles()).resolves.toEqual([profile]);
+    await expect(client.getExtractionProfile('invoice-basic')).resolves.toEqual(
+      profile,
+    );
+
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      'https://engine.example/api/v1/connectors?capability=ENTRY',
+      'https://engine.example/api/v1/connectors/direct-upload',
+      'https://engine.example/api/v1/extraction-profiles',
+      'https://engine.example/api/v1/extraction-profiles/invoice-basic',
+    ]);
+  });
+
   it('uses the bearer token and never sends the legacy identity header', async () => {
     const fetchMock = jest
       .spyOn(globalThis, 'fetch')

@@ -52,6 +52,15 @@ describe('ConnectorRegistry', () => {
     );
   });
 
+  it('filters descriptors by installed capability', () => {
+    const registry = new ConnectorRegistry([connector]);
+
+    expect(registry.descriptorsWithCapability('ENTRY')).toEqual([
+      connector.descriptor,
+    ]);
+    expect(registry.descriptorsWithCapability('DESTINATION')).toEqual([]);
+  });
+
   it('rejects duplicate connectors and secret-shaped schemas', () => {
     expect(() => new ConnectorRegistry([connector, connector])).toThrow(
       'CONNECTOR_DUPLICATE',

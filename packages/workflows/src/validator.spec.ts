@@ -42,6 +42,7 @@ const validator = new WorkflowDefinitionValidator(
   ]),
   new InMemoryExtractionProfileCatalog([
     {
+      displayName: 'Invoice',
       outputFields: ['invoice_number'],
       outputSchemaHash: 'schema-hash',
       profileId: 'invoice',

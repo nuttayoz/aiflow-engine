@@ -85,6 +85,25 @@ const main = async () => {
     (response) => response.ok,
   );
 
+  const entryConnectors = await request('/api/v1/connectors?capability=ENTRY');
+  const directUploadDescriptor = await request(
+    '/api/v1/connectors/direct-upload',
+  );
+  const extractionProfiles = await request('/api/v1/extraction-profiles');
+  const invoiceProfile = await request(
+    '/api/v1/extraction-profiles/invoice-basic',
+  );
+  if (
+    entryConnectors.length !== 1 ||
+    entryConnectors[0]?.connectorId !== 'direct-upload' ||
+    directUploadDescriptor.actions[0]?.capability !== 'ENTRY' ||
+    extractionProfiles.length !== 1 ||
+    extractionProfiles[0]?.profileId !== 'invoice-basic' ||
+    invoiceProfile.displayName !== 'Basic invoice'
+  ) {
+    throw new Error('SMOKE_CATALOG_INVALID');
+  }
+
   const workflow = await request(`/api/v1/projects/${projectId}/workflows`, {
     body: JSON.stringify({
       definition: {

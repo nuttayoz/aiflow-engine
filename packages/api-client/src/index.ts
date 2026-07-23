@@ -1,3 +1,31 @@
+export type ConnectorCapability = 'DESTINATION' | 'ENTRY';
+
+export interface ConnectorActionView {
+  readonly actionId: string;
+  readonly capability: ConnectorCapability;
+  readonly configurationSchema: Readonly<Record<string, unknown>>;
+  readonly configurationSchemaVersion: number;
+  readonly displayName: string;
+  readonly provisioningMode: 'MANAGED' | 'NONE' | 'VALIDATE_ONLY';
+  readonly version: number;
+}
+
+export interface ConnectorView {
+  readonly actions: readonly ConnectorActionView[];
+  readonly connectorId: string;
+  readonly displayName: string;
+  readonly version: number;
+}
+
+export interface ExtractionProfileView {
+  readonly displayName: string;
+  readonly outputFields: readonly string[];
+  readonly outputSchemaHash: string;
+  readonly profileId: string;
+  readonly profileKind: 'CUSTOM' | 'SYSTEM';
+  readonly profileVersionId: string;
+}
+
 export interface WorkflowDefinitionV1 {
   readonly schemaVersion: 1;
   readonly entry: {
@@ -160,6 +188,32 @@ export class AiFlowClient {
     private readonly baseUrl: string,
     private readonly accessToken?: () => string | undefined,
   ) {}
+
+  listConnectors(
+    capability?: ConnectorCapability,
+  ): Promise<readonly ConnectorView[]> {
+    const query =
+      capability === undefined
+        ? ''
+        : `?capability=${encodeURIComponent(capability)}`;
+    return this.requestList(`/api/v1/connectors${query}`);
+  }
+
+  getConnector(connectorId: string): Promise<ConnectorView> {
+    return this.request(
+      `/api/v1/connectors/${encodeURIComponent(connectorId)}`,
+    );
+  }
+
+  listExtractionProfiles(): Promise<readonly ExtractionProfileView[]> {
+    return this.requestList('/api/v1/extraction-profiles');
+  }
+
+  getExtractionProfile(profileId: string): Promise<ExtractionProfileView> {
+    return this.request(
+      `/api/v1/extraction-profiles/${encodeURIComponent(profileId)}`,
+    );
+  }
 
   listWorkflows(projectId: string): Promise<readonly WorkflowView[]> {
     return this.requestList(

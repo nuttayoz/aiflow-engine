@@ -11,6 +11,7 @@ import {
   ParseIntPipe,
   Post,
   Put,
+  Query,
   Req,
 } from '@nestjs/common';
 
@@ -23,19 +24,42 @@ export class ApiController {
   constructor(@Inject(ApiService) private readonly service: ApiService) {}
 
   @Get('connectors')
-  connectors() {
+  connectors(
+    @Req() request: AuthorizedRequest,
+    @Query('capability') capability: string | undefined,
+  ) {
+    requireAuthorization(request);
     return {
-      data: this.service.connectorCatalog(),
+      data: this.service.connectorCatalog(capability),
       page: { nextCursor: null },
     };
   }
 
+  @Get('connectors/:connectorId')
+  connector(
+    @Req() request: AuthorizedRequest,
+    @Param('connectorId') connectorId: string,
+  ) {
+    requireAuthorization(request);
+    return { data: this.service.connectorDescriptor(connectorId) };
+  }
+
   @Get('extraction-profiles')
-  extractionProfiles() {
+  extractionProfiles(@Req() request: AuthorizedRequest) {
+    requireAuthorization(request);
     return {
       data: this.service.extractionProfileCatalog(),
       page: { nextCursor: null },
     };
+  }
+
+  @Get('extraction-profiles/:profileId')
+  extractionProfile(
+    @Req() request: AuthorizedRequest,
+    @Param('profileId') profileId: string,
+  ) {
+    requireAuthorization(request);
+    return { data: this.service.extractionProfileDescriptor(profileId) };
   }
 
   @Post('projects/:projectId/workflows')
