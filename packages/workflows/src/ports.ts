@@ -218,7 +218,6 @@ export interface ManagedEntryProvisioner {
     readonly actionId: string;
     readonly capabilityHash: string;
     readonly configuration: Readonly<Record<string, unknown>>;
-    readonly configurationHash: string;
     readonly connectionId: string;
     readonly operationId: string;
     readonly projectId: string;

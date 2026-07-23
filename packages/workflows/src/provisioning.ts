@@ -120,7 +120,6 @@ export class WorkflowProvisioningService {
         actionId: entryAction.actionId,
         capabilityHash: entryActivation.capabilityHash,
         configuration: version.definition.definition.entry.config,
-        configurationHash: version.definition.definitionHash,
         connectionId,
         operationId: operation.id,
         projectId: operation.projectId,
