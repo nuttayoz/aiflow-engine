@@ -40,6 +40,27 @@ export interface WorkflowView {
   readonly status: string;
 }
 
+export interface WorkflowVersionView {
+  readonly createdAt: string;
+  readonly createdBy: {
+    readonly id: string;
+    readonly type: 'SERVICE' | 'SYSTEM' | 'USER';
+  };
+  readonly definition: WorkflowDefinitionV1;
+  readonly definitionHash: string;
+  readonly id: string;
+  readonly profileReference: {
+    readonly outputSchemaHash: string;
+    readonly profileId: string;
+    readonly profileKind: 'CUSTOM' | 'SYSTEM';
+    readonly profileVersionId: string;
+  };
+  readonly schemaVersion: 1;
+  readonly status: 'VALID';
+  readonly versionNumber: number;
+  readonly workflowId: string;
+}
+
 export interface UploadPlan {
   readonly expiresAt: string;
   readonly uploadSessionId: string;
@@ -106,7 +127,7 @@ const sha256Base64 = async (value: Blob | ArrayBuffer): Promise<string> => {
 export class AiFlowClient {
   constructor(
     private readonly baseUrl: string,
-    private readonly accessToken: () => string,
+    private readonly accessToken?: () => string | undefined,
   ) {}
 
   listWorkflows(projectId: string): Promise<readonly WorkflowView[]> {
@@ -133,6 +154,49 @@ export class AiFlowClient {
         },
         method: 'POST',
       },
+    );
+  }
+
+  getWorkflow(workflowId: string): Promise<WorkflowView> {
+    return this.request(`/api/v1/workflows/${encodeURIComponent(workflowId)}`);
+  }
+
+  createWorkflowVersion(input: {
+    readonly basedOnVersionId: string;
+    readonly definition: WorkflowDefinitionV1;
+    readonly idempotencyKey?: string;
+    readonly workflowId: string;
+  }): Promise<WorkflowVersionView> {
+    return this.request(
+      `/api/v1/workflows/${encodeURIComponent(input.workflowId)}/versions`,
+      {
+        body: JSON.stringify({
+          basedOnVersionId: input.basedOnVersionId,
+          definition: input.definition,
+        }),
+        headers: {
+          'Idempotency-Key':
+            input.idempotencyKey ?? randomKey('workflow-version'),
+        },
+        method: 'POST',
+      },
+    );
+  }
+
+  listWorkflowVersions(
+    workflowId: string,
+  ): Promise<readonly WorkflowVersionView[]> {
+    return this.requestList(
+      `/api/v1/workflows/${encodeURIComponent(workflowId)}/versions`,
+    );
+  }
+
+  getWorkflowVersion(
+    workflowId: string,
+    versionId: string,
+  ): Promise<WorkflowVersionView> {
+    return this.request(
+      `/api/v1/workflows/${encodeURIComponent(workflowId)}/versions/${encodeURIComponent(versionId)}`,
     );
   }
 
@@ -288,13 +352,17 @@ export class AiFlowClient {
   }
 
   private async raw(path: string, init: RequestInit = {}): Promise<Response> {
+    const headers = new Headers(init.headers);
+    const token = this.accessToken?.()?.trim();
+    if (token && !headers.has('Authorization')) {
+      headers.set('Authorization', `Bearer ${token}`);
+    }
+    if (init.body !== undefined && !headers.has('Content-Type')) {
+      headers.set('Content-Type', 'application/json');
+    }
     const response = await fetch(`${this.baseUrl.replace(/\/$/u, '')}${path}`, {
       ...init,
-      headers: {
-        Authorization: `Bearer ${this.accessToken()}`,
-        'Content-Type': 'application/json',
-        ...init.headers,
-      },
+      headers,
     });
     if (!response.ok) {
       const body = (await response.json()) as {

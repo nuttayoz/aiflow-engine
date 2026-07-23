@@ -82,6 +82,52 @@ export class ApiController {
     };
   }
 
+  @Post('workflows/:workflowId/versions')
+  async createWorkflowVersion(
+    @Req() request: AuthorizedRequest,
+    @Param('workflowId') workflowId: string,
+    @Body() body: unknown,
+    @Headers('idempotency-key') idempotencyKey: string | undefined,
+  ) {
+    return {
+      data: await this.service.createWorkflowVersion(
+        requireAuthorization(request),
+        workflowId,
+        body,
+        idempotencyKey,
+      ),
+    };
+  }
+
+  @Get('workflows/:workflowId/versions')
+  async listWorkflowVersions(
+    @Req() request: AuthorizedRequest,
+    @Param('workflowId') workflowId: string,
+  ) {
+    return {
+      data: await this.service.listWorkflowVersions(
+        requireAuthorization(request),
+        workflowId,
+      ),
+      page: { nextCursor: null },
+    };
+  }
+
+  @Get('workflows/:workflowId/versions/:versionId')
+  async getWorkflowVersion(
+    @Req() request: AuthorizedRequest,
+    @Param('workflowId') workflowId: string,
+    @Param('versionId') versionId: string,
+  ) {
+    return {
+      data: await this.service.getWorkflowVersion(
+        requireAuthorization(request),
+        workflowId,
+        versionId,
+      ),
+    };
+  }
+
   @Put('workflows/:workflowId/activation')
   @HttpCode(202)
   async activateWorkflow(

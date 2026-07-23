@@ -564,6 +564,85 @@ describe('PostgreSQL foundation', () => {
     });
   });
 
+  it('creates immutable workflow versions idempotently with optimistic edit context', async () => {
+    const workflows = new PostgresWorkflowRepository(
+      runtimeDataSource,
+      runtimeConfig.schema,
+    );
+    const tenantId = 'tenant-workflow-version';
+    const workflowId = randomUUID();
+    const firstVersionId = randomUUID();
+    await workflows.create({
+      actor: { id: 'user-a', type: 'USER' },
+      causationId: 'create-versioned-workflow',
+      correlationId: 'version-correlation',
+      definition: validatedDefinition,
+      name: 'Versioned workflow',
+      projectId: 'project-a',
+      tenantId,
+      versionId: firstVersionId,
+      workflowId,
+    });
+
+    const revisedDefinition: ValidatedWorkflowDefinition = {
+      ...validatedDefinition,
+      definition: {
+        ...validatedDefinition.definition,
+        mappings: [
+          {
+            required: true,
+            sourceField: 'value',
+            targetField: 'value',
+          },
+        ],
+      },
+      definitionHash: 'c'.repeat(64),
+    };
+    const secondVersionId = randomUUID();
+    const createInput = {
+      actor: { id: 'user-a', type: 'USER' as const },
+      basedOnVersionId: firstVersionId,
+      causationId: 'edit-versioned-workflow',
+      correlationId: 'version-correlation',
+      definition: revisedDefinition,
+      idempotencyKey: 'edit-versioned-workflow-once',
+      tenantId,
+      versionId: secondVersionId,
+      workflowId,
+    };
+    await expect(workflows.createVersion(createInput)).resolves.toMatchObject({
+      id: secondVersionId,
+      versionNumber: 2,
+      workflowId,
+    });
+    await expect(
+      workflows.createVersion({ ...createInput, versionId: randomUUID() }),
+    ).resolves.toMatchObject({ id: secondVersionId, versionNumber: 2 });
+    await expect(workflows.listVersions(tenantId, workflowId)).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: firstVersionId, versionNumber: 1 }),
+        expect.objectContaining({ id: secondVersionId, versionNumber: 2 }),
+      ]),
+    );
+    await expect(
+      workflows.createVersion({
+        ...createInput,
+        idempotencyKey: 'stale-edit',
+        versionId: randomUUID(),
+      }),
+    ).rejects.toThrow('WORKFLOW_VERSION_CONFLICT');
+    await expect(
+      workflows.createVersion({
+        ...createInput,
+        definition: validatedDefinition,
+        versionId: randomUUID(),
+      }),
+    ).rejects.toThrow('IDEMPOTENCY_KEY_REUSED');
+    await expect(
+      workflows.listVersions('different-tenant', workflowId),
+    ).resolves.toEqual([]);
+  });
+
   it('enforces tenant ownership in composite foreign keys', async () => {
     const connections = new PostgresConnectionRepository(
       runtimeDataSource,

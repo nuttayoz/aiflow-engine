@@ -39,11 +39,26 @@ export interface CreateWorkflowInput {
   readonly workflowId: string;
 }
 
+export interface CreateWorkflowVersionInput {
+  readonly actor: ActorIdentity;
+  readonly basedOnVersionId: string;
+  readonly causationId: string;
+  readonly correlationId: string;
+  readonly definition: ValidatedWorkflowDefinition;
+  readonly idempotencyKey: string;
+  readonly tenantId: string;
+  readonly versionId: string;
+  readonly workflowId: string;
+}
+
 export interface WorkflowRepository {
   create(input: CreateWorkflowInput): Promise<{
     readonly version: WorkflowVersionRecord;
     readonly workflow: WorkflowRecord;
   }>;
+  createVersion(
+    input: CreateWorkflowVersionInput,
+  ): Promise<WorkflowVersionRecord>;
   findById(
     tenantId: string,
     workflowId: string,
@@ -57,6 +72,11 @@ export interface WorkflowRepository {
     tenantId: string,
     workflowId: string,
   ): Promise<WorkflowVersionRecord | undefined>;
+  listVersions(
+    tenantId: string,
+    workflowId: string,
+    limit?: number,
+  ): Promise<readonly WorkflowVersionRecord[]>;
   listByProject(
     tenantId: string,
     projectId: string,

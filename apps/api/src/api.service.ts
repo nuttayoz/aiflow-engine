@@ -34,6 +34,7 @@ import {
   WorkflowDefinitionValidator,
   type WorkflowDefinitionV1,
   type WorkflowRecord,
+  type WorkflowVersionRecord,
 } from '@aiflow/workflows';
 
 import type { ApiAuthorization } from './api-auth';
@@ -105,6 +106,19 @@ const executionView = (execution: ExecutionRecord) => ({
   transitionedAt: execution.transitionedAt,
   workflowId: execution.workflowId,
   workflowVersionId: execution.workflowVersionId,
+});
+
+const workflowVersionView = (version: WorkflowVersionRecord) => ({
+  createdAt: version.createdAt,
+  createdBy: version.createdBy,
+  definition: version.definition.definition,
+  definitionHash: version.definition.definitionHash,
+  id: version.id,
+  profileReference: version.definition.profileReference,
+  schemaVersion: version.definition.definition.schemaVersion,
+  status: 'VALID' as const,
+  versionNumber: version.versionNumber,
+  workflowId: version.workflowId,
 });
 
 @Injectable()
@@ -228,6 +242,73 @@ export class ApiService
       workflow.id,
     );
     return this.workflowView(workflow, version);
+  }
+
+  async createWorkflowVersion(
+    authorization: ApiAuthorization,
+    workflowId: string,
+    body: unknown,
+    rawIdempotencyKey: string | undefined,
+  ) {
+    await this.authorizeWorkflow(authorization, workflowId);
+    const input = requireRecord(body, 'WORKFLOW_VERSION_INPUT_INVALID');
+    if (
+      typeof input.basedOnVersionId !== 'string' ||
+      input.basedOnVersionId.trim().length === 0 ||
+      input.basedOnVersionId.length > 256
+    ) {
+      throw new Error('WORKFLOW_VERSION_BASE_INVALID');
+    }
+    const validation = this.validator.validate(input.definition);
+    if (!validation.valid) {
+      throw new Error('WORKFLOW_CONFIGURATION_INVALID');
+    }
+    const idempotencyKey = requireIdempotencyKey(rawIdempotencyKey);
+    const version = await this.requireWorkflows().createVersion({
+      actor: authorization.actor,
+      basedOnVersionId: input.basedOnVersionId.trim(),
+      causationId: idempotencyKey,
+      correlationId: authorization.correlationId,
+      definition: validation.value,
+      idempotencyKey,
+      tenantId: authorization.tenantId,
+      versionId: uuidFrom(
+        'workflow-version-edit',
+        authorization.tenantId,
+        idempotencyKey,
+      ),
+      workflowId,
+    });
+    return workflowVersionView(version);
+  }
+
+  async listWorkflowVersions(
+    authorization: ApiAuthorization,
+    workflowId: string,
+  ) {
+    await this.authorizeWorkflow(authorization, workflowId);
+    const versions = await this.requireWorkflows().listVersions(
+      authorization.tenantId,
+      workflowId,
+    );
+    return versions.map(workflowVersionView);
+  }
+
+  async getWorkflowVersion(
+    authorization: ApiAuthorization,
+    workflowId: string,
+    versionId: string,
+  ) {
+    await this.authorizeWorkflow(authorization, workflowId);
+    const version = await this.requireWorkflows().findVersionById(
+      authorization.tenantId,
+      workflowId,
+      versionId,
+    );
+    if (version === undefined) {
+      throw new Error('WORKFLOW_VERSION_NOT_FOUND');
+    }
+    return workflowVersionView(version);
   }
 
   async activateWorkflow(
@@ -488,6 +569,19 @@ export class ApiService
     if (session === undefined) throw new Error('UPLOAD_SESSION_NOT_FOUND');
     authorizeProject(authorization, session.projectId);
     return session;
+  }
+
+  private async authorizeWorkflow(
+    authorization: ApiAuthorization,
+    workflowId: string,
+  ) {
+    return projectWorkflow(
+      authorization,
+      await this.requireWorkflows().findById(
+        authorization.tenantId,
+        workflowId,
+      ),
+    );
   }
 
   private workflowView(

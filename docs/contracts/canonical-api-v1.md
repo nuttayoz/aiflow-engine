@@ -2,14 +2,16 @@
 
 Status: initial Phase 0B contract, 2026-07-14.
 
-This contract defines the API that the existing DevPortal will call directly for new AiFlow functionality. It is independent of n8n, legacy DevPortal workflow payloads, and any specific connector vendor.
+This contract defines the API that the existing DevPortal consumes through its
+same-origin Next.js BFF for new AiFlow functionality. It is independent of n8n,
+legacy DevPortal workflow payloads, and any specific connector vendor.
 
 The machine-readable workflow-definition envelope is [`schemas/workflow-definition.v1.schema.json`](schemas/workflow-definition.v1.schema.json).
 
 ## Decisions
 
 - Public base path: `/api/v1`.
-- DevPortal calls AiFlow Engine directly through the platform API gateway.
+- DevPortal calls AiFlow Engine through its same-origin Next.js BFF and the platform API gateway; document transfer uses only returned presigned S3 capabilities.
 - All identifiers are opaque strings. Clients must not parse or infer meaning from them.
 - Workflow configuration is immutable and versioned.
 - Workflow activation is separate from draft creation or editing because connector provisioning may be asynchronous.
@@ -32,7 +34,7 @@ Changing a workflow creates a new workflow version. It does not change the HTTP 
 
 ## Authentication and request headers
 
-All DevPortal requests require:
+All BFF-to-engine requests require:
 
 ```http
 Authorization: Bearer <access-token>
@@ -265,6 +267,39 @@ Idempotency-Key: edit-invoice-intake-02
 ```
 
 The abbreviated nested objects above represent a complete definition conforming to the schema. `basedOnVersionId` provides optimistic edit context. The server rejects a stale edit when the agreed concurrency rule is violated.
+
+Successful response:
+
+```json
+{
+  "data": {
+    "id": "new-version-id",
+    "workflowId": "workflow-id",
+    "versionNumber": 2,
+    "schemaVersion": 1,
+    "status": "VALID",
+    "definition": {},
+    "definitionHash": "sha256-hex",
+    "profileReference": {
+      "profileId": "general-invoice",
+      "profileVersionId": "general-invoice-v1",
+      "profileKind": "SYSTEM",
+      "outputSchemaHash": "sha256-hex"
+    },
+    "createdBy": {
+      "id": "actor-id",
+      "type": "USER"
+    },
+    "createdAt": "2026-07-22T08:00:00.000Z"
+  }
+}
+```
+
+The repository serializes version creation per workflow. Reusing the same
+idempotency key and payload returns the original version; changing the payload
+with that key returns `IDEMPOTENCY_KEY_REUSED`. A different request based on a
+non-latest version returns `WORKFLOW_VERSION_CONFLICT` and never creates a
+partial version or reference projection.
 
 ### Activate a version
 
