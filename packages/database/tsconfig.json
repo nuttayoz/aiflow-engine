@@ -11,6 +11,7 @@
   "references": [
     { "path": "../config" },
     { "path": "../connections" },
+    { "path": "../connectors/microsoft-sharepoint" },
     { "path": "../core" },
     { "path": "../documents" },
     { "path": "../executions" },

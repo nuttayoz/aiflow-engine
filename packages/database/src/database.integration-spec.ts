@@ -28,6 +28,7 @@ import {
   PostgresExecutionRecoveryRepository,
   PostgresSchedulerLeaseRepository,
 } from './scheduler.repository';
+import { PostgresSharePointRepository } from './sharepoint.repository';
 import { PostgresStorageObjectRepository } from './storage-object.repository';
 import { PostgresWorkflowProvisioningRepository } from './workflow-provisioning.repository';
 import { PostgresWorkflowRepository } from './workflow.repository';
@@ -1034,6 +1035,212 @@ describe('PostgreSQL foundation', () => {
         tenantId,
       }),
     ).rejects.toThrow('CONNECTION_REFERENCE_CONFLICT');
+  });
+
+  it('deduplicates SharePoint callbacks and coalesces their durable wake-up', async () => {
+    const tenantId = `sharepoint-tenant-${randomUUID()}`;
+    const projectId = 'sharepoint-project';
+    const connectionId = randomUUID();
+    const workflowId = randomUUID();
+    const workflowVersionId = randomUUID();
+    const bindingId = randomUUID();
+    const watchId = randomUUID();
+    const subscriptionId = `subscription-${randomUUID()}`;
+    const clientStateDigest = 'c'.repeat(64);
+    const resource = 'drives/drive-1/root';
+
+    const connections = new PostgresConnectionRepository(
+      runtimeDataSource,
+      runtimeConfig.schema,
+    );
+    const workflows = new PostgresWorkflowRepository(
+      runtimeDataSource,
+      runtimeConfig.schema,
+    );
+    await connections.create({
+      actor: { id: 'sharepoint-test', type: 'SYSTEM' },
+      causationId: 'sharepoint-connection',
+      configuration: {},
+      configurationSchemaVersion: 1,
+      connectorId: 'microsoft-sharepoint',
+      correlationId: 'sharepoint-callback-test',
+      displayName: 'SharePoint test connection',
+      id: connectionId,
+      idempotencyKey: `connection-${connectionId}`,
+      tenantId,
+    });
+    await workflows.create({
+      actor: { id: 'sharepoint-test', type: 'SYSTEM' },
+      causationId: 'sharepoint-workflow',
+      correlationId: 'sharepoint-callback-test',
+      definition: validatedDefinition,
+      name: 'SharePoint callback workflow',
+      projectId,
+      tenantId,
+      versionId: workflowVersionId,
+      workflowId,
+    });
+    await runtimeDataSource.query(
+      `
+        INSERT INTO aiflow.connector_provisioning_bindings (
+          id,
+          tenant_id,
+          project_id,
+          workflow_id,
+          workflow_version_id,
+          connector_id,
+          capability,
+          capability_version,
+          configuration_schema_version,
+          connection_id,
+          configuration_hash,
+          capability_hash,
+          provisioning_key,
+          provider_resource_ref,
+          status,
+          health,
+          accepting_new_documents
+        ) VALUES (
+          $1, $2, $3, $4, $5,
+          'microsoft-sharepoint', 'ENTRY', 1, 1, $6,
+          $7, $8, $9, $10, 'ACTIVE', 'HEALTHY', true
+        )
+      `,
+      [
+        bindingId,
+        tenantId,
+        projectId,
+        workflowId,
+        workflowVersionId,
+        connectionId,
+        'd'.repeat(64),
+        'e'.repeat(64),
+        randomUUID(),
+        watchId,
+      ],
+    );
+    await runtimeDataSource.query(
+      `
+        INSERT INTO aiflow.sharepoint_drive_watches (
+          id,
+          tenant_id,
+          connection_id,
+          external_tenant_id,
+          site_id,
+          drive_id,
+          root_item_id,
+          resource,
+          change_type,
+          subscription_id,
+          subscription_expires_at,
+          client_state_key_version,
+          client_state_digest,
+          baseline_status,
+          subscription_status,
+          health
+        ) VALUES (
+          $1, $2, $3, 'external-tenant-1', 'site-1', 'drive-1', 'root-1',
+          $4, 'updated', $5, clock_timestamp() + interval '20 days',
+          1, $6, 'COMPLETE', 'ACTIVE', 'HEALTHY'
+        )
+      `,
+      [
+        watchId,
+        tenantId,
+        connectionId,
+        resource,
+        subscriptionId,
+        clientStateDigest,
+      ],
+    );
+    await runtimeDataSource.query(
+      `
+        INSERT INTO aiflow.sharepoint_binding_scopes (
+          tenant_id,
+          binding_id,
+          watch_id,
+          site_id,
+          drive_id,
+          folder_id,
+          include_subfolders,
+          binding_generation
+        ) VALUES ($1, $2, $3, 'site-1', 'drive-1', 'folder-1', true, 1)
+      `,
+      [tenantId, bindingId, watchId],
+    );
+
+    const sharePoint = new PostgresSharePointRepository(
+      runtimeDataSource,
+      runtimeConfig.schema,
+    );
+    const watch = await sharePoint.findWatchBySubscriptionId(subscriptionId);
+    expect(watch).toMatchObject({
+      externalTenantId: 'external-tenant-1',
+      projectId,
+      tenantId,
+      watchId,
+    });
+    const notification = {
+      bodySha256: 'a'.repeat(64),
+      eventKeyHash: '1'.repeat(64),
+      expectedClientStateDigest: clientStateDigest,
+      expectedResource: resource,
+      expectedSubscriptionId: subscriptionId,
+      notificationKind: 'CHANGE' as const,
+      projectId,
+      receivedAt: new Date('2026-07-23T00:00:00.000Z'),
+      tenantId,
+      watchId,
+    };
+    await expect(
+      sharePoint.recordVerifiedNotification(notification),
+    ).resolves.toBe('ACCEPTED');
+    await expect(
+      sharePoint.recordVerifiedNotification(notification),
+    ).resolves.toBe('DUPLICATE');
+    await expect(
+      sharePoint.recordVerifiedNotification({
+        ...notification,
+        eventKeyHash: '2'.repeat(64),
+      }),
+    ).resolves.toBe('ACCEPTED');
+
+    const [state] = (await runtimeDataSource.query(
+      `
+        SELECT
+          watch.notification_generation,
+          watch.sync_command_pending,
+          (
+            SELECT count(*)::int
+            FROM aiflow.sharepoint_notification_events
+            WHERE tenant_id = $1 AND watch_id = $2
+          ) AS event_count,
+          (
+            SELECT count(*)::int
+            FROM aiflow.outbox_messages
+            WHERE tenant_id = $1
+              AND aggregate_type = 'SHAREPOINT_DRIVE_WATCH'
+              AND aggregate_id = $2::text
+          ) AS outbox_count
+        FROM aiflow.sharepoint_drive_watches AS watch
+        WHERE watch.tenant_id = $1 AND watch.id = $2
+      `,
+      [tenantId, watchId],
+    )) as {
+      event_count: number;
+      notification_generation: number | string;
+      outbox_count: number;
+      sync_command_pending: boolean;
+    }[];
+    expect({
+      ...state,
+      notification_generation: Number(state?.notification_generation),
+    }).toEqual({
+      event_count: 2,
+      notification_generation: 2,
+      outbox_count: 1,
+      sync_command_pending: true,
+    });
   });
 
   it('enforces tenant ownership in composite foreign keys', async () => {

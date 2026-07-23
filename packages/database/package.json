@@ -10,6 +10,7 @@
   "dependencies": {
     "@aiflow/config": "workspace:*",
     "@aiflow/connections": "workspace:*",
+    "@aiflow/connector-microsoft-sharepoint": "workspace:*",
     "@aiflow/core": "workspace:*",
     "@aiflow/documents": "workspace:*",
     "@aiflow/executions": "workspace:*",

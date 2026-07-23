@@ -197,7 +197,7 @@ Microsoft Graph calls a separate public provider boundary:
 POST /provider-callbacks/v1/microsoft-graph/sharepoint
 ```
 
-This endpoint does not accept an end-user bearer token, tenant header, project ID, workflow ID, provider URL, document bytes, or resource data.
+This endpoint does not accept an end-user bearer token, tenant header, project ID, workflow ID, provider URL, document bytes, encrypted content, or rich resource data. A basic notification may contain Graph's bounded resource identifier projection; the boundary validates and discards it because delta remains authoritative.
 
 ### Validation challenge
 
@@ -207,7 +207,7 @@ For a bounded `validationToken` query, the endpoint URL-decodes the opaque token
 
 For each notification in a bounded collection, the callback:
 
-1. validates content type, body size, JSON shape, collection count, and bounded fields;
+1. validates content type, body size, JSON shape, collection count, bounded fields, and any basic resource identifier projection, then discards that projection;
 2. finds the watch by exact stored `subscriptionId` without trusting a tenant hint;
 3. derives and constant-time compares expected `clientState`;
 4. verifies external tenant, resource, change type/lifecycle type, and subscription context against the watch;

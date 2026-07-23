@@ -4,6 +4,7 @@ import { connectorCapabilityHash } from '@aiflow/connector-sdk';
 export * from './client-state';
 export * from './fake-graph';
 export * from './graph-port';
+export * from './notification';
 
 export interface SharePointEntryConfiguration extends Readonly<
   Record<string, unknown>

@@ -46,6 +46,21 @@ export const deriveSharePointClientState = (
 export const sharePointClientStateDigest = (clientState: string): string =>
   createHash('sha256').update(clientState).digest('hex');
 
+export const verifySharePointClientStateDigest = (
+  suppliedClientState: string,
+  expectedDigest: string,
+): boolean => {
+  const suppliedDigest = Buffer.from(
+    sharePointClientStateDigest(suppliedClientState),
+    'hex',
+  );
+  const expected = Buffer.from(expectedDigest, 'hex');
+  return (
+    expected.byteLength === suppliedDigest.byteLength &&
+    timingSafeEqual(suppliedDigest, expected)
+  );
+};
+
 export const verifySharePointClientState = (
   suppliedClientState: string,
   watchId: string,

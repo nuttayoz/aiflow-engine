@@ -7,6 +7,10 @@ import { RuntimeTelemetry } from '@aiflow/observability';
 import { HealthController } from './health.controller';
 import { ApiController } from './api.controller';
 import { API_S3_CONFIG, ApiService } from './api.service';
+import {
+  SharePointCallbackController,
+  SharePointCallbackService,
+} from './sharepoint-callback.controller';
 
 @Module({})
 export class ApiModule {
@@ -16,13 +20,18 @@ export class ApiModule {
     telemetry: RuntimeTelemetry,
   ): DynamicModule {
     return {
-      controllers: [ApiController, HealthController],
+      controllers: [
+        ApiController,
+        HealthController,
+        SharePointCallbackController,
+      ],
       imports: [
         DatabaseModule.register({ config: databaseConfig, role: 'api' }),
       ],
       module: ApiModule,
       providers: [
         ApiService,
+        SharePointCallbackService,
         { provide: API_S3_CONFIG, useValue: s3Config },
         { provide: RuntimeTelemetry, useValue: telemetry },
       ],
