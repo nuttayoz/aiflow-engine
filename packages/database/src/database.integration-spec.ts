@@ -180,6 +180,81 @@ describe('PostgreSQL foundation', () => {
     }
   });
 
+  it('installs the additive Phase 4 SharePoint persistence boundary', async () => {
+    const rows = (await runtimeDataSource.query(
+      `
+        SELECT table_name
+        FROM information_schema.tables
+        WHERE table_schema = 'aiflow'
+          AND table_name = ANY($1::text[])
+        ORDER BY table_name
+      `,
+      [
+        [
+          'connector_provisioning_bindings',
+          'document_ingestions',
+          'sharepoint_binding_scopes',
+          'sharepoint_drive_items',
+          'sharepoint_drive_watches',
+          'sharepoint_notification_events',
+        ],
+      ],
+    )) as { table_name: string }[];
+
+    expect(rows.map(({ table_name: tableName }) => tableName)).toEqual([
+      'connector_provisioning_bindings',
+      'document_ingestions',
+      'sharepoint_binding_scopes',
+      'sharepoint_drive_items',
+      'sharepoint_drive_watches',
+      'sharepoint_notification_events',
+    ]);
+    const constraints = (await runtimeDataSource.query(
+      `
+        SELECT constraint_name
+        FROM information_schema.table_constraints
+        WHERE table_schema = 'aiflow'
+          AND constraint_name = ANY($1::text[])
+        ORDER BY constraint_name
+      `,
+      [
+        [
+          'connector_provisioning_bindings_connection_fk',
+          'document_ingestions_source_unique',
+          'sharepoint_drive_watches_change_type_check',
+          'sharepoint_notification_events_unique',
+        ],
+      ],
+    )) as { constraint_name: string }[];
+    expect(
+      constraints.map(({ constraint_name: constraintName }) => constraintName),
+    ).toEqual([
+      'connector_provisioning_bindings_connection_fk',
+      'document_ingestions_source_unique',
+      'sharepoint_drive_watches_change_type_check',
+      'sharepoint_notification_events_unique',
+    ]);
+    const forbiddenColumns = (await runtimeDataSource.query(
+      `
+        SELECT column_name
+        FROM information_schema.columns
+        WHERE table_schema = 'aiflow'
+          AND table_name LIKE 'sharepoint_%'
+          AND column_name = ANY($1::text[])
+      `,
+      [
+        [
+          'access_token',
+          'client_state',
+          'committed_delta_cursor',
+          'download_url',
+          'raw_body',
+        ],
+      ],
+    )) as { column_name: string }[];
+    expect(forbiddenColumns).toEqual([]);
+  });
+
   it('keeps activation, execution, inbox, outbox, and leases durable and tenant-isolated', async () => {
     const workflows = new PostgresWorkflowRepository(
       runtimeDataSource,
