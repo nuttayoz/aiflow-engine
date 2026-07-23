@@ -290,6 +290,9 @@ Implemented Phase 3 slices:
 - Activation-state projection plus immediate, idempotent intake closure for the
   current non-managed connectors, including operation serialization, audit
   facts, stored replay results, and upload-gate smoke coverage.
+- Archive-only workflow removal with inactive/provisioning/cleanup guards,
+  retained history, idempotent audit behavior, normal-list filtering, and typed
+  client/smoke coverage.
 
 Exit criteria:
 

@@ -226,6 +226,7 @@ export class PostgresWorkflowProvisioningRepository implements WorkflowProvision
         `
           SELECT
             workflow.active_version_id,
+            workflow.status AS workflow_status,
             version.definition_hash
           FROM ${this.workflows} AS workflow
           JOIN ${this.versions} AS version
@@ -246,10 +247,14 @@ export class PostgresWorkflowProvisioningRepository implements WorkflowProvision
       )) as {
         active_version_id: string | null;
         definition_hash: string;
+        workflow_status: 'ACTIVE' | 'ARCHIVED' | 'INACTIVE';
       }[];
       const target = targets[0];
       if (target === undefined) {
         throw new Error('WORKFLOW_VERSION_NOT_FOUND');
+      }
+      if (target.workflow_status === 'ARCHIVED') {
+        throw new Error('WORKFLOW_ARCHIVED');
       }
 
       const current = (await manager.query(

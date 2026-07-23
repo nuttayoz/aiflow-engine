@@ -3,6 +3,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import type { DataSource, EntityManager } from 'typeorm';
 
 import type {
+  ArchiveWorkflowInput,
   CreateWorkflowInput,
   CreateWorkflowVersionInput,
   ValidatedWorkflowDefinition,
@@ -55,6 +56,14 @@ interface WorkflowIdentityRow {
   status: WorkflowRecord['status'];
 }
 
+interface WorkflowArchiveRow {
+  accepting_new_documents: boolean;
+  active_version_id: string | null;
+  cleanup_required: boolean;
+  project_id: string;
+  status: WorkflowRecord['status'];
+}
+
 const mapWorkflow = (row: WorkflowRow): WorkflowRecord => ({
   acceptingNewDocuments: row.accepting_new_documents,
   ...(row.active_version_id === null
@@ -76,6 +85,7 @@ export class PostgresWorkflowRepository implements WorkflowRepository {
   private readonly auditEvents: string;
   private readonly connectionReferences: string;
   private readonly idempotency: string;
+  private readonly operations: string;
   private readonly profileReferences: string;
   private readonly versions: string;
   private readonly workflows: string;
@@ -90,9 +100,164 @@ export class PostgresWorkflowRepository implements WorkflowRepository {
       'workflow_version_connection_refs',
     );
     this.idempotency = table(schema, 'idempotency_records');
+    this.operations = table(schema, 'workflow_activation_operations');
     this.profileReferences = table(schema, 'workflow_version_profile_refs');
     this.versions = table(schema, 'workflow_versions');
     this.workflows = table(schema, 'workflows');
+  }
+
+  async archive(input: ArchiveWorkflowInput): Promise<WorkflowRecord> {
+    if (
+      input.idempotencyKey.trim().length === 0 ||
+      input.idempotencyKey.length > 256
+    ) {
+      throw new Error('IDEMPOTENCY_KEY_INVALID');
+    }
+    const fingerprint = createHash('sha256')
+      .update(
+        JSON.stringify({
+          projectId: input.projectId,
+          workflowId: input.workflowId,
+        }),
+      )
+      .digest('hex');
+
+    await this.dataSource.transaction(async (manager) => {
+      const rows = (await manager.query(
+        `
+          SELECT
+            project_id,
+            status,
+            active_version_id,
+            accepting_new_documents,
+            cleanup_required
+          FROM ${this.workflows}
+          WHERE tenant_id = $1 AND project_id = $2 AND id = $3
+          FOR UPDATE
+        `,
+        [input.tenantId, input.projectId, input.workflowId],
+      )) as WorkflowArchiveRow[];
+      const workflow = rows[0];
+      if (workflow === undefined) {
+        throw new Error('WORKFLOW_NOT_FOUND');
+      }
+
+      const existing = (await manager.query(
+        `
+          SELECT request_fingerprint, resource_id
+          FROM ${this.idempotency}
+          WHERE tenant_id = $1
+            AND operation_scope = 'workflow.archive'
+            AND idempotency_key = $2
+          FOR UPDATE
+        `,
+        [input.tenantId, input.idempotencyKey],
+      )) as { request_fingerprint: string; resource_id: string | null }[];
+      if (existing[0] !== undefined) {
+        if (existing[0].request_fingerprint !== fingerprint) {
+          throw new Error('IDEMPOTENCY_KEY_REUSED');
+        }
+        if (existing[0].resource_id !== input.workflowId) {
+          throw new Error('WORKFLOW_ARCHIVE_IDEMPOTENCY_INCONSISTENT');
+        }
+        return;
+      }
+
+      const current = (await manager.query(
+        `
+          SELECT id
+          FROM ${this.operations}
+          WHERE tenant_id = $1
+            AND workflow_id = $2
+            AND status IN ('PENDING', 'RUNNING', 'WAITING_RETRY', 'RECONCILING')
+          LIMIT 1
+          FOR UPDATE
+        `,
+        [input.tenantId, input.workflowId],
+      )) as { id: string }[];
+      if (current.length > 0) {
+        throw new Error('WORKFLOW_PROVISIONING_IN_PROGRESS');
+      }
+      if (
+        workflow.status === 'ACTIVE' ||
+        workflow.active_version_id !== null ||
+        workflow.accepting_new_documents ||
+        workflow.cleanup_required
+      ) {
+        throw new Error('WORKFLOW_ARCHIVE_NOT_ALLOWED');
+      }
+
+      const inserted = (await manager.query(
+        `
+          INSERT INTO ${this.idempotency} (
+            id,
+            tenant_id,
+            operation_scope,
+            idempotency_key,
+            request_fingerprint,
+            status,
+            resource_type,
+            resource_id,
+            completed_at,
+            expires_at
+          ) VALUES (
+            $1, $2, 'workflow.archive', $3, $4, 'COMPLETED',
+            'WORKFLOW', $5, clock_timestamp(), clock_timestamp() + interval '90 days'
+          )
+          ON CONFLICT (tenant_id, operation_scope, idempotency_key) DO NOTHING
+          RETURNING id
+        `,
+        [
+          randomUUID(),
+          input.tenantId,
+          input.idempotencyKey,
+          fingerprint,
+          input.workflowId,
+        ],
+      )) as { id: string }[];
+      if (inserted.length === 0) {
+        const concurrent = (await manager.query(
+          `
+            SELECT request_fingerprint, resource_id
+            FROM ${this.idempotency}
+            WHERE tenant_id = $1
+              AND operation_scope = 'workflow.archive'
+              AND idempotency_key = $2
+            FOR UPDATE
+          `,
+          [input.tenantId, input.idempotencyKey],
+        )) as { request_fingerprint: string; resource_id: string | null }[];
+        if (concurrent[0]?.request_fingerprint !== fingerprint) {
+          throw new Error('IDEMPOTENCY_KEY_REUSED');
+        }
+        if (concurrent[0]?.resource_id !== input.workflowId) {
+          throw new Error('WORKFLOW_ARCHIVE_IDEMPOTENCY_INCONSISTENT');
+        }
+        return;
+      }
+
+      const changed = workflow.status !== 'ARCHIVED';
+      if (changed) {
+        await manager.query(
+          `
+            UPDATE ${this.workflows}
+            SET status = 'ARCHIVED',
+                archived_at = clock_timestamp(),
+                state_version = state_version + 1,
+                updated_at = clock_timestamp()
+            WHERE tenant_id = $1 AND project_id = $2 AND id = $3
+          `,
+          [input.tenantId, input.projectId, input.workflowId],
+        );
+      }
+      await this.appendArchiveAudit(manager, input, changed);
+    });
+
+    const workflow = await this.findById(input.tenantId, input.workflowId);
+    if (workflow === undefined) {
+      throw new Error('WORKFLOW_ARCHIVE_INCONSISTENT');
+    }
+    return workflow;
   }
 
   async create(input: CreateWorkflowInput): Promise<{
@@ -583,6 +748,41 @@ export class PostgresWorkflowRepository implements WorkflowRepository {
         input.correlationId,
         input.causationId,
         input.versionId,
+      ],
+    );
+  }
+
+  private async appendArchiveAudit(
+    manager: EntityManager,
+    input: ArchiveWorkflowInput,
+    changed: boolean,
+  ): Promise<void> {
+    await manager.query(
+      `
+        INSERT INTO ${this.auditEvents} (
+          id,
+          tenant_id,
+          project_id,
+          actor_type,
+          actor_id,
+          action,
+          resource_type,
+          resource_id,
+          outcome,
+          correlation_id,
+          causation_id
+        ) VALUES ($1, $2, $3, $4, $5, $6, 'WORKFLOW', $7, 'SUCCEEDED', $8, $9)
+      `,
+      [
+        randomUUID(),
+        input.tenantId,
+        input.projectId,
+        input.actor.type,
+        input.actor.id,
+        changed ? 'workflow.archive' : 'workflow.archive.noop',
+        input.workflowId,
+        input.correlationId,
+        input.causationId,
       ],
     );
   }

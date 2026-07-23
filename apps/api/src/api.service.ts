@@ -288,6 +288,29 @@ export class ApiService
     return this.workflowView(workflow, version);
   }
 
+  async archiveWorkflow(
+    authorization: ApiAuthorization,
+    workflowId: string,
+    rawIdempotencyKey: string | undefined,
+  ) {
+    const workflow = await this.authorizeWorkflow(authorization, workflowId);
+    const idempotencyKey = requireIdempotencyKey(rawIdempotencyKey);
+    const archived = await this.requireWorkflows().archive({
+      actor: authorization.actor,
+      causationId: idempotencyKey,
+      correlationId: authorization.correlationId,
+      idempotencyKey,
+      projectId: workflow.projectId,
+      tenantId: authorization.tenantId,
+      workflowId,
+    });
+    const version = await this.requireWorkflows().findLatestVersion(
+      authorization.tenantId,
+      workflowId,
+    );
+    return this.workflowView(archived, version);
+  }
+
   async createWorkflowVersion(
     authorization: ApiAuthorization,
     workflowId: string,

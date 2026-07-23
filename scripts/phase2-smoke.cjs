@@ -276,6 +276,25 @@ const main = async () => {
   ) {
     throw new Error('SMOKE_DEACTIVATION_GATE_FAILED');
   }
+  const archiveKey = `archive-${runId}`;
+  const archived = await request(`/api/v1/workflows/${workflow.id}`, {
+    headers: { 'Idempotency-Key': archiveKey },
+    method: 'DELETE',
+  });
+  const replayedArchive = await request(`/api/v1/workflows/${workflow.id}`, {
+    headers: { 'Idempotency-Key': archiveKey },
+    method: 'DELETE',
+  });
+  const visibleWorkflows = await request(
+    `/api/v1/projects/${projectId}/workflows`,
+  );
+  if (
+    archived.status !== 'ARCHIVED' ||
+    JSON.stringify(replayedArchive) !== JSON.stringify(archived) ||
+    visibleWorkflows.some((candidate) => candidate.id === workflow.id)
+  ) {
+    throw new Error('SMOKE_WORKFLOW_ARCHIVE_FAILED');
+  }
   process.stdout.write(
     `${JSON.stringify(
       {
@@ -285,6 +304,7 @@ const main = async () => {
           status,
         })),
         status: execution.status,
+        workflowArchived: archived.status === 'ARCHIVED',
         workflowAcceptingNewDocuments: deactivated.acceptingNewDocuments,
         workflowId: workflow.id,
       },

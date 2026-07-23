@@ -82,6 +82,21 @@ export class ApiController {
     };
   }
 
+  @Delete('workflows/:workflowId')
+  async archiveWorkflow(
+    @Req() request: AuthorizedRequest,
+    @Param('workflowId') workflowId: string,
+    @Headers('idempotency-key') idempotencyKey: string | undefined,
+  ) {
+    return {
+      data: await this.service.archiveWorkflow(
+        requireAuthorization(request),
+        workflowId,
+        idempotencyKey,
+      ),
+    };
+  }
+
   @Post('workflows/:workflowId/versions')
   async createWorkflowVersion(
     @Req() request: AuthorizedRequest,

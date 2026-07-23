@@ -638,6 +638,17 @@ describe('PostgreSQL foundation', () => {
       operationId,
       tenantId,
     });
+    await expect(
+      workflows.archive({
+        actor: { id: 'user-a', type: 'USER' },
+        causationId: 'archive-active-workflow',
+        correlationId: 'deactivation-correlation',
+        idempotencyKey: 'archive-active-workflow',
+        projectId,
+        tenantId,
+        workflowId,
+      }),
+    ).rejects.toThrow('WORKFLOW_ARCHIVE_NOT_ALLOWED');
 
     const deactivationInput = {
       actor: { id: 'user-a', type: 'USER' as const },
@@ -674,6 +685,56 @@ describe('PostgreSQL foundation', () => {
         idempotencyKey: 'deactivate-workflow-again',
       }),
     ).resolves.toEqual(deactivated);
+
+    const archiveInput = {
+      actor: { id: 'user-a', type: 'USER' as const },
+      causationId: 'archive-workflow',
+      correlationId: 'deactivation-correlation',
+      idempotencyKey: 'archive-workflow-once',
+      projectId,
+      tenantId,
+      workflowId,
+    };
+    await expect(workflows.archive(archiveInput)).resolves.toMatchObject({
+      id: workflowId,
+      status: 'ARCHIVED',
+    });
+    await expect(workflows.archive(archiveInput)).resolves.toMatchObject({
+      id: workflowId,
+      status: 'ARCHIVED',
+    });
+    await expect(workflows.listByProject(tenantId, projectId)).resolves.toEqual(
+      [],
+    );
+    await expect(
+      workflows.listVersions(tenantId, workflowId),
+    ).resolves.toHaveLength(1);
+    await expect(
+      workflows.createVersion({
+        actor: { id: 'user-a', type: 'USER' },
+        basedOnVersionId: versionId,
+        causationId: 'edit-archived-workflow',
+        correlationId: 'deactivation-correlation',
+        definition: validatedDefinition,
+        idempotencyKey: 'edit-archived-workflow',
+        tenantId,
+        versionId: randomUUID(),
+        workflowId,
+      }),
+    ).rejects.toThrow('WORKFLOW_ARCHIVED');
+    await expect(
+      provisioning.requestActivation({
+        actor: { id: 'user-a', type: 'USER' },
+        causationId: 'activate-archived-workflow',
+        correlationId: 'deactivation-correlation',
+        idempotencyKey: 'activate-archived-workflow',
+        operationId: randomUUID(),
+        projectId,
+        targetVersionId: versionId,
+        tenantId,
+        workflowId,
+      }),
+    ).rejects.toThrow('WORKFLOW_ARCHIVED');
   });
 
   it('creates immutable workflow versions idempotently with optimistic edit context', async () => {

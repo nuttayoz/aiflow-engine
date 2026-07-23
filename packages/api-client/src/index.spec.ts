@@ -182,6 +182,43 @@ describe('DevPortal canonical API client boundary', () => {
     );
   });
 
+  it('archives a workflow without using legacy delete payloads', async () => {
+    const archived = {
+      acceptingNewDocuments: false,
+      activeVersionId: null,
+      cleanupRequired: false,
+      health: 'UNKNOWN',
+      id: 'workflow-1',
+      latestVersion: {
+        definition,
+        id: 'version-2',
+        versionNumber: 2,
+      },
+      name: 'Invoice intake',
+      projectId: 'project-1',
+      status: 'ARCHIVED',
+    };
+    const fetchMock = jest
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(jsonResponse(archived));
+    const client = new AiFlowClient('https://engine.example', () => 'token-1');
+
+    await expect(
+      client.archiveWorkflow({
+        idempotencyKey: 'archive-workflow-1',
+        workflowId: 'workflow-1',
+      }),
+    ).resolves.toEqual(archived);
+
+    const [url, init] = fetchMock.mock.calls[0] ?? [];
+    expect(url).toBe('https://engine.example/api/v1/workflows/workflow-1');
+    expect(init?.method).toBe('DELETE');
+    expect(new Headers(init?.headers).get('Idempotency-Key')).toBe(
+      'archive-workflow-1',
+    );
+    expect(init?.body).toBeUndefined();
+  });
+
   it('sends document bytes only to the presigned storage capability', async () => {
     const file = new File(['phase-three-upload'], 'invoice.pdf', {
       type: 'application/pdf',

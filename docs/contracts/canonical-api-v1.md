@@ -156,7 +156,7 @@ Adding this connector requires a new descriptor, implementation, and contract te
 | `GET /api/v1/projects/:projectId/workflows`             | List project workflows                                         |
 | `GET /api/v1/workflows/:workflowId`                     | Get workflow metadata and version summary                      |
 | `PATCH /api/v1/workflows/:workflowId`                   | Change workflow display metadata only                          |
-| `DELETE /api/v1/workflows/:workflowId`                  | Archive/delete according to retention policy                   |
+| `DELETE /api/v1/workflows/:workflowId`                  | Soft-archive an inactive workflow while retaining history      |
 | `POST /api/v1/workflows/:workflowId/versions`           | Create a new immutable draft version                           |
 | `GET /api/v1/workflows/:workflowId/versions`            | List workflow versions                                         |
 | `GET /api/v1/workflows/:workflowId/versions/:versionId` | Get one immutable version                                      |
@@ -300,6 +300,24 @@ idempotency key and payload returns the original version; changing the payload
 with that key returns `IDEMPOTENCY_KEY_REUSED`. A different request based on a
 non-latest version returns `WORKFLOW_VERSION_CONFLICT` and never creates a
 partial version or reference projection.
+
+### Archive a workflow
+
+The initial removal policy is deliberately archive-only:
+
+```http
+DELETE /api/v1/workflows/workflow-id
+Authorization: Bearer <token>
+Idempotency-Key: archive-invoice-intake
+```
+
+Archive requires the workflow to be inactive with no open provisioning
+operation or managed cleanup. It sets `status: "ARCHIVED"` and removes the
+workflow from normal project lists while retaining immutable versions,
+executions, documents, provisioning history, and audit facts. An active
+workflow returns `409 WORKFLOW_ARCHIVE_NOT_ALLOWED`; the user must deactivate it
+first. Reusing the same key is idempotent. Hard deletion is not exposed by API
+v1.
 
 ### Activate a version
 

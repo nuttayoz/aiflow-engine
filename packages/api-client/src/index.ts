@@ -192,6 +192,22 @@ export class AiFlowClient {
     return this.request(`/api/v1/workflows/${encodeURIComponent(workflowId)}`);
   }
 
+  archiveWorkflow(input: {
+    readonly idempotencyKey?: string;
+    readonly workflowId: string;
+  }): Promise<WorkflowView> {
+    return this.request(
+      `/api/v1/workflows/${encodeURIComponent(input.workflowId)}`,
+      {
+        headers: {
+          'Idempotency-Key':
+            input.idempotencyKey ?? randomKey('workflow-archive'),
+        },
+        method: 'DELETE',
+      },
+    );
+  }
+
   createWorkflowVersion(input: {
     readonly basedOnVersionId: string;
     readonly definition: WorkflowDefinitionV1;

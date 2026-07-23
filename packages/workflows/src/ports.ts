@@ -52,7 +52,18 @@ export interface CreateWorkflowVersionInput {
   readonly workflowId: string;
 }
 
+export interface ArchiveWorkflowInput {
+  readonly actor: ActorIdentity;
+  readonly causationId: string;
+  readonly correlationId: string;
+  readonly idempotencyKey: string;
+  readonly projectId: string;
+  readonly tenantId: string;
+  readonly workflowId: string;
+}
+
 export interface WorkflowRepository {
+  archive(input: ArchiveWorkflowInput): Promise<WorkflowRecord>;
   create(input: CreateWorkflowInput): Promise<{
     readonly version: WorkflowVersionRecord;
     readonly workflow: WorkflowRecord;
