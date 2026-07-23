@@ -10,13 +10,15 @@ This roadmap controls implementation order. A phase starts only after its entry 
 | Phase 0B | Contract and platform discovery    | Complete      |
 | Phase 1  | Reliable engine foundation         | Code complete |
 | Phase 2  | Direct-upload proof and demo       | Complete      |
-| Phase 3  | Existing DevPortal compatibility   | In progress   |
+| Phase 3  | Existing DevPortal compatibility   | Complete      |
 | Phase 4  | SharePoint entry and destination   | Not started   |
 | Phase 5  | Templates and review               | Not started   |
 | Phase 6  | Migration, cutover, and retirement | Not started   |
 
-Phase 2 is complete. Phase 3 compatibility implementation is in progress;
-Phase 4 and later product behavior is not implemented.
+Phase 3 is complete and locally proven through the real DevPortal BFF, engine
+runtime roles, PostgreSQL, RabbitMQ, and S3-compatible storage. Production
+cutover still requires the deployment-owned OIDC/project-authorization and
+provider adapters. Phase 4 and later product behavior is not implemented.
 
 ## Phase 0A: repository skeleton
 
@@ -264,8 +266,9 @@ Verification:
 
 ## Phase 3: existing DevPortal compatibility and provisioning
 
-Status: in progress; the source compatibility baseline has been revalidated and
-canonical workflow lifecycle gaps are the first implementation slice.
+Status: complete; the compatibility journey is locally proven. Production
+platform authentication and live provider authorization remain deployment
+prerequisites rather than local compatibility work.
 
 Purpose: make the new engine fit the current UI rather than rebuilding the frontend.
 
@@ -299,6 +302,30 @@ Implemented Phase 3 slices:
 - Tenant-scoped connection metadata create/list/get/rename/revoke APIs with
   idempotency, audit, optimistic concurrency, immutable-version reference
   guards, connector compatibility validation, and typed client/demo support.
+- A server-only, same-origin Next.js BFF that forwards canonical engine
+  requests, strips legacy identity headers, forwards platform bearer
+  authentication in production, and provides an exact-project local token path
+  only in non-production environments.
+- Canonical DevPortal queries for workflow lifecycle, connector/profile
+  catalogs, safe connection metadata, direct S3 upload, execution history, and
+  retry while preserving the existing App Router routes, TanStack Query
+  ownership, and visual structure.
+- The existing two-step workflow builder now creates immutable canonical
+  versions, activates/deactivates workflows, and archives them without creating
+  n8n workflow, credential, tag, or database records.
+- A real local proof through the DevPortal BFF that created and activated a
+  workflow, streamed a PDF directly to S3-compatible storage, completed
+  extraction/mapping/delivery, exposed the original filename, created and
+  activated an edited immutable version, and observed successful provisioning.
+
+Production deployment prerequisites:
+
+- Configure the approved OIDC and project-authorization adapters and platform
+  claim mapping.
+- Configure live Microsoft Business Central authorization/provider bindings;
+  the local proof intentionally uses the safe fake adapter.
+- Capture production-equivalent ingress fixtures before redirecting any legacy
+  traffic.
 
 Exit criteria:
 

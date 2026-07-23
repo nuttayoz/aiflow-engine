@@ -1,6 +1,8 @@
 # DevPortal compatibility contract
 
-Status: Phase 3 implementation baseline, corrected and revalidated 2026-07-22.
+Status: Phase 3 local compatibility implementation complete and proven
+2026-07-23; production authentication/provider wiring remains a deployment
+prerequisite.
 
 This document records the current AiFlow contract that the existing DevPortal UI consumes and defines the compatibility boundary for AiFlow Engine. It separates behavior that users rely on from n8n and Google implementation details that must not enter the engine core.
 
