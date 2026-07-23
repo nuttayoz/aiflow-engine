@@ -816,6 +816,151 @@ describe('PostgreSQL foundation', () => {
     ).resolves.toEqual([]);
   });
 
+  it('manages idempotent tenant-scoped connection metadata', async () => {
+    const connections = new PostgresConnectionRepository(
+      runtimeDataSource,
+      runtimeConfig.schema,
+    );
+    const tenantId = 'connection-tenant';
+    const connectionId = randomUUID();
+    const createInput = {
+      actor: { id: 'user-a', type: 'USER' as const },
+      causationId: 'connection-create',
+      configuration: {},
+      configurationSchemaVersion: 1,
+      connectorId: 'synthetic',
+      correlationId: 'connection-correlation',
+      displayName: 'Initial connection',
+      id: connectionId,
+      idempotencyKey: 'connection-create-once',
+      tenantId,
+    };
+
+    await expect(connections.create(createInput)).resolves.toMatchObject({
+      displayName: 'Initial connection',
+      id: connectionId,
+      stateVersion: 0,
+      status: 'ACTIVE',
+    });
+    await expect(
+      connections.create({ ...createInput, id: randomUUID() }),
+    ).resolves.toMatchObject({ id: connectionId });
+    await expect(
+      connections.create({
+        ...createInput,
+        displayName: 'Conflicting replay',
+        id: randomUUID(),
+      }),
+    ).rejects.toThrow('IDEMPOTENCY_KEY_REUSED');
+    await expect(connections.list(tenantId, 'synthetic')).resolves.toHaveLength(
+      1,
+    );
+    await expect(
+      connections.list('different-tenant', 'synthetic'),
+    ).resolves.toEqual([]);
+
+    const updateInput = {
+      actor: createInput.actor,
+      causationId: 'connection-update',
+      connectionId,
+      correlationId: 'connection-correlation',
+      displayName: 'Renamed connection',
+      expectedStateVersion: 0,
+      idempotencyKey: 'connection-update-once',
+      tenantId,
+    };
+    await expect(connections.update(updateInput)).resolves.toMatchObject({
+      displayName: 'Renamed connection',
+      stateVersion: 1,
+    });
+    await expect(connections.update(updateInput)).resolves.toMatchObject({
+      displayName: 'Renamed connection',
+      stateVersion: 1,
+    });
+    await expect(
+      connections.update({
+        ...updateInput,
+        idempotencyKey: 'connection-update-stale',
+      }),
+    ).rejects.toThrow('CONNECTION_VERSION_CONFLICT');
+
+    const revokeInput = {
+      actor: createInput.actor,
+      causationId: 'connection-revoke',
+      connectionId,
+      correlationId: 'connection-correlation',
+      idempotencyKey: 'connection-revoke-once',
+      tenantId,
+    };
+    await expect(connections.revoke(revokeInput)).resolves.toMatchObject({
+      stateVersion: 2,
+      status: 'REVOKED',
+    });
+    await expect(connections.revoke(revokeInput)).resolves.toMatchObject({
+      stateVersion: 2,
+      status: 'REVOKED',
+    });
+    await expect(connections.list(tenantId)).resolves.toEqual([]);
+  });
+
+  it('prevents connection revocation while immutable versions reference it', async () => {
+    const connections = new PostgresConnectionRepository(
+      runtimeDataSource,
+      runtimeConfig.schema,
+    );
+    const workflows = new PostgresWorkflowRepository(
+      runtimeDataSource,
+      runtimeConfig.schema,
+    );
+    const tenantId = 'referenced-connection-tenant';
+    const connectionId = randomUUID();
+    const actor = { id: 'user-a', type: 'USER' as const };
+    await connections.create({
+      actor,
+      causationId: 'referenced-connection-create',
+      configuration: {},
+      configurationSchemaVersion: 1,
+      connectorId: 'synthetic',
+      correlationId: 'referenced-connection-correlation',
+      displayName: 'Referenced connection',
+      id: connectionId,
+      idempotencyKey: 'referenced-connection-create',
+      tenantId,
+    });
+    await workflows.create({
+      actor,
+      causationId: 'referenced-workflow-create',
+      correlationId: 'referenced-workflow-correlation',
+      definition: {
+        ...validatedDefinition,
+        connectionReferences: [{ connectionId, purpose: 'DESTINATION' }],
+        definition: {
+          ...validatedDefinition.definition,
+          destination: {
+            ...validatedDefinition.definition.destination,
+            connectionId,
+          },
+        },
+      },
+      name: 'Referenced connection workflow',
+      projectId: 'project-a',
+      tenantId,
+      versionId: randomUUID(),
+      workflowId: randomUUID(),
+    });
+
+    await expect(
+      connections.revoke({
+        actor,
+        causationId: 'referenced-connection-revoke',
+        connectionId,
+        correlationId: 'referenced-connection-correlation',
+        idempotencyKey: 'referenced-connection-revoke',
+        tenantId,
+      }),
+    ).rejects.toThrow('CONNECTION_REFERENCE_CONFLICT');
+  });
+
   it('enforces tenant ownership in composite foreign keys', async () => {
     const connections = new PostgresConnectionRepository(
       runtimeDataSource,
@@ -827,11 +972,15 @@ describe('PostgreSQL foundation', () => {
     );
     const foreignConnectionId = randomUUID();
     await connections.create({
+      actor: { id: 'user-b', type: 'USER' },
+      causationId: 'cross-tenant-connection',
       configuration: {},
       configurationSchemaVersion: 1,
       connectorId: 'synthetic',
+      correlationId: 'cross-tenant-connection',
       displayName: 'Tenant B destination',
       id: foreignConnectionId,
+      idempotencyKey: 'cross-tenant-connection',
       tenantId: 'tenant-b',
     });
     await expect(
