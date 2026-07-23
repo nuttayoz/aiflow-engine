@@ -16,12 +16,14 @@ import {
 import type { S3RuntimeConfig } from '@aiflow/config';
 import {
   DatabaseService,
+  PostgresConnectionRepository,
   PostgresExecutionRepository,
   PostgresPipelineRepository,
   PostgresUploadSessionRepository,
   PostgresWorkflowProvisioningRepository,
   PostgresWorkflowRepository,
 } from '@aiflow/database';
+import type { ConnectionRecord } from '@aiflow/connections';
 import type { ExecutionRecord } from '@aiflow/executions';
 import {
   InMemoryExtractionProfileCatalog,
@@ -169,10 +171,24 @@ const deactivationView = (result: WorkflowDeactivationResult) => ({
   workflowId: result.workflowId,
 });
 
+const connectionView = (connection: ConnectionRecord) => ({
+  configuration: connection.configuration,
+  configurationSchemaVersion: connection.configurationSchemaVersion,
+  connectorId: connection.connectorId,
+  createdAt: connection.createdAt,
+  displayName: connection.displayName,
+  health: connection.health,
+  id: connection.id,
+  stateVersion: connection.stateVersion,
+  status: connection.status,
+  updatedAt: connection.updatedAt,
+});
+
 @Injectable()
 export class ApiService
   implements OnApplicationBootstrap, OnApplicationShutdown
 {
+  private connections?: PostgresConnectionRepository;
   private executions?: PostgresExecutionRepository;
   private pipeline?: PostgresPipelineRepository;
   private provisioning?: PostgresWorkflowProvisioningRepository;
@@ -196,6 +212,7 @@ export class ApiService
 
   onApplicationBootstrap(): void {
     const { dataSource, schema } = this.database;
+    this.connections = new PostgresConnectionRepository(dataSource, schema);
     this.workflows = new PostgresWorkflowRepository(dataSource, schema);
     this.provisioning = new PostgresWorkflowProvisioningRepository(
       dataSource,
@@ -234,6 +251,135 @@ export class ApiService
     const profile = profiles.find(profileId);
     if (profile === undefined) throw new Error('EXTRACTION_PROFILE_NOT_FOUND');
     return profile;
+  }
+
+  async createConnection(
+    authorization: ApiAuthorization,
+    body: unknown,
+    rawIdempotencyKey: string | undefined,
+  ) {
+    const input = requireRecord(body, 'CONNECTION_INPUT_INVALID');
+    if (
+      Object.keys(input).some(
+        (key) => !['configuration', 'connectorId', 'displayName'].includes(key),
+      )
+    ) {
+      throw new Error('CONNECTION_INPUT_INVALID');
+    }
+    if (typeof input.connectorId !== 'string') {
+      throw new Error('CONNECTION_CONNECTOR_INVALID');
+    }
+    if (typeof input.displayName !== 'string') {
+      throw new Error('CONNECTION_DISPLAY_NAME_INVALID');
+    }
+    const connector = this.connectors.get(input.connectorId);
+    if (connector === undefined) throw new Error('CONNECTOR_NOT_FOUND');
+    if (
+      !connector.descriptor.actions.some((action) => action.connectionRequired)
+    ) {
+      throw new Error('CONNECTION_CONNECTOR_NOT_SUPPORTED');
+    }
+    const configuration =
+      input.configuration === undefined
+        ? {}
+        : requireRecord(
+            input.configuration,
+            'CONNECTION_CONFIGURATION_INVALID',
+          );
+    if (Object.keys(configuration).length > 0) {
+      throw new Error('CONNECTION_CONFIGURATION_INVALID');
+    }
+    const idempotencyKey = requireIdempotencyKey(rawIdempotencyKey);
+    const connection = await this.requireConnections().create({
+      actor: authorization.actor,
+      causationId: idempotencyKey,
+      configuration,
+      configurationSchemaVersion: 1,
+      connectorId: input.connectorId,
+      correlationId: authorization.correlationId,
+      displayName: input.displayName,
+      id: uuidFrom('connection', authorization.tenantId, idempotencyKey),
+      idempotencyKey,
+      tenantId: authorization.tenantId,
+    });
+    return connectionView(connection);
+  }
+
+  async listConnections(authorization: ApiAuthorization, connectorId?: string) {
+    if (
+      connectorId !== undefined &&
+      this.connectors.get(connectorId) === undefined
+    ) {
+      throw new Error('CONNECTOR_NOT_FOUND');
+    }
+    const connections = await this.requireConnections().list(
+      authorization.tenantId,
+      connectorId,
+    );
+    return connections.map(connectionView);
+  }
+
+  async getConnection(authorization: ApiAuthorization, connectionId: string) {
+    const connection = await this.requireConnections().findById(
+      authorization.tenantId,
+      connectionId,
+    );
+    if (connection === undefined) throw new Error('CONNECTION_NOT_FOUND');
+    return connectionView(connection);
+  }
+
+  async updateConnection(
+    authorization: ApiAuthorization,
+    connectionId: string,
+    body: unknown,
+    rawIdempotencyKey: string | undefined,
+  ) {
+    const input = requireRecord(body, 'CONNECTION_INPUT_INVALID');
+    if (
+      Object.keys(input).some(
+        (key) => !['displayName', 'expectedStateVersion'].includes(key),
+      )
+    ) {
+      throw new Error('CONNECTION_INPUT_INVALID');
+    }
+    if (typeof input.displayName !== 'string') {
+      throw new Error('CONNECTION_DISPLAY_NAME_INVALID');
+    }
+    if (
+      typeof input.expectedStateVersion !== 'number' ||
+      !Number.isInteger(input.expectedStateVersion)
+    ) {
+      throw new Error('CONNECTION_STATE_VERSION_INVALID');
+    }
+    const idempotencyKey = requireIdempotencyKey(rawIdempotencyKey);
+    const connection = await this.requireConnections().update({
+      actor: authorization.actor,
+      causationId: idempotencyKey,
+      connectionId,
+      correlationId: authorization.correlationId,
+      displayName: input.displayName,
+      expectedStateVersion: input.expectedStateVersion,
+      idempotencyKey,
+      tenantId: authorization.tenantId,
+    });
+    return connectionView(connection);
+  }
+
+  async revokeConnection(
+    authorization: ApiAuthorization,
+    connectionId: string,
+    rawIdempotencyKey: string | undefined,
+  ) {
+    const idempotencyKey = requireIdempotencyKey(rawIdempotencyKey);
+    const connection = await this.requireConnections().revoke({
+      actor: authorization.actor,
+      causationId: idempotencyKey,
+      connectionId,
+      correlationId: authorization.correlationId,
+      idempotencyKey,
+      tenantId: authorization.tenantId,
+    });
+    return connectionView(connection);
   }
 
   async createWorkflow(
@@ -742,6 +888,10 @@ export class ApiService
   private requireExecutions() {
     if (!this.executions) throw new Error('API_NOT_READY');
     return this.executions;
+  }
+  private requireConnections() {
+    if (!this.connections) throw new Error('API_NOT_READY');
+    return this.connections;
   }
   private requirePipeline() {
     if (!this.pipeline) throw new Error('API_NOT_READY');

@@ -41,6 +41,7 @@
     },
     "destination": {
       "connectorId": "microsoft-business-central",
+      "connectionId": "11111111-1111-4111-a111-111111111111",
       "actionId": "create-purchase-invoice-draft",
       "config": {
         "companyId": "demo-company"

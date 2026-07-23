@@ -3,6 +3,7 @@ export type ConnectorCapability = 'DESTINATION' | 'ENTRY';
 export interface ConnectorActionView {
   readonly actionId: string;
   readonly capability: ConnectorCapability;
+  readonly connectionRequired: boolean;
   readonly configurationSchema: Readonly<Record<string, unknown>>;
   readonly configurationSchemaVersion: number;
   readonly displayName: string;
@@ -24,6 +25,19 @@ export interface ExtractionProfileView {
   readonly profileId: string;
   readonly profileKind: 'CUSTOM' | 'SYSTEM';
   readonly profileVersionId: string;
+}
+
+export interface ConnectionView {
+  readonly configuration: Readonly<Record<string, unknown>>;
+  readonly configurationSchemaVersion: number;
+  readonly connectorId: string;
+  readonly createdAt: string;
+  readonly displayName: string;
+  readonly health: 'DEGRADED' | 'HEALTHY' | 'UNKNOWN';
+  readonly id: string;
+  readonly stateVersion: number;
+  readonly status: 'ACTIVE' | 'DISABLED' | 'REVOKED';
+  readonly updatedAt: string;
 }
 
 export interface WorkflowDefinitionV1 {
@@ -212,6 +226,77 @@ export class AiFlowClient {
   getExtractionProfile(profileId: string): Promise<ExtractionProfileView> {
     return this.request(
       `/api/v1/extraction-profiles/${encodeURIComponent(profileId)}`,
+    );
+  }
+
+  createConnection(input: {
+    readonly connectorId: string;
+    readonly displayName: string;
+    readonly idempotencyKey?: string;
+  }): Promise<ConnectionView> {
+    return this.request('/api/v1/connections', {
+      body: JSON.stringify({
+        configuration: {},
+        connectorId: input.connectorId,
+        displayName: input.displayName,
+      }),
+      headers: {
+        'Idempotency-Key':
+          input.idempotencyKey ?? randomKey('connection-create'),
+      },
+      method: 'POST',
+    });
+  }
+
+  listConnections(connectorId?: string): Promise<readonly ConnectionView[]> {
+    const query =
+      connectorId === undefined
+        ? ''
+        : `?connectorId=${encodeURIComponent(connectorId)}`;
+    return this.requestList(`/api/v1/connections${query}`);
+  }
+
+  getConnection(connectionId: string): Promise<ConnectionView> {
+    return this.request(
+      `/api/v1/connections/${encodeURIComponent(connectionId)}`,
+    );
+  }
+
+  updateConnection(input: {
+    readonly connectionId: string;
+    readonly displayName: string;
+    readonly expectedStateVersion: number;
+    readonly idempotencyKey?: string;
+  }): Promise<ConnectionView> {
+    return this.request(
+      `/api/v1/connections/${encodeURIComponent(input.connectionId)}`,
+      {
+        body: JSON.stringify({
+          displayName: input.displayName,
+          expectedStateVersion: input.expectedStateVersion,
+        }),
+        headers: {
+          'Idempotency-Key':
+            input.idempotencyKey ?? randomKey('connection-update'),
+        },
+        method: 'PATCH',
+      },
+    );
+  }
+
+  revokeConnection(input: {
+    readonly connectionId: string;
+    readonly idempotencyKey?: string;
+  }): Promise<ConnectionView> {
+    return this.request(
+      `/api/v1/connections/${encodeURIComponent(input.connectionId)}`,
+      {
+        headers: {
+          'Idempotency-Key':
+            input.idempotencyKey ?? randomKey('connection-revoke'),
+        },
+        method: 'DELETE',
+      },
     );
   }
 

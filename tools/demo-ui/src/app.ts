@@ -84,10 +84,11 @@ const loadWorkflows = async (): Promise<void> => {
   }
 };
 
-const definition = (): WorkflowDefinitionV1 => ({
+const definition = (connectionId: string): WorkflowDefinitionV1 => ({
   destination: {
     actionId: 'create-purchase-invoice-draft',
     config: { companyId: element<HTMLInputElement>('company-id').value },
+    connectionId,
     connectorId: 'microsoft-business-central',
   },
   entry: { config: {}, connectorId: 'direct-upload' },
@@ -158,8 +159,12 @@ const waitForActivation = async (operationId: string): Promise<void> => {
 };
 
 const createWorkflow = async (): Promise<void> => {
+  const connection = await api.createConnection({
+    connectorId: 'microsoft-business-central',
+    displayName: `${element<HTMLInputElement>('workflow-name').value} Business Central`,
+  });
   const created = await api.createWorkflow({
-    definition: definition(),
+    definition: definition(connection.id),
     name: element<HTMLInputElement>('workflow-name').value,
     projectId,
   });

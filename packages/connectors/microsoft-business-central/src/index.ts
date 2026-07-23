@@ -190,6 +190,7 @@ const descriptor = {
     {
       actionId: 'create-purchase-invoice-draft',
       capability: 'DESTINATION',
+      connectionRequired: true,
       configurationSchema: {
         additionalProperties: false,
         properties: {

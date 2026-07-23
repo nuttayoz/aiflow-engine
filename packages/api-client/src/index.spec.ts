@@ -5,6 +5,7 @@ const definition: WorkflowDefinitionV1 = {
   destination: {
     actionId: 'create-purchase-invoice-draft',
     config: { companyId: 'company-1' },
+    connectionId: 'connection-1',
     connectorId: 'microsoft-business-central',
   },
   entry: { config: {}, connectorId: 'direct-upload' },
@@ -83,6 +84,71 @@ describe('DevPortal canonical API client boundary', () => {
     const headers = new Headers(init?.headers);
     expect(headers.get('Authorization')).toBe('Bearer token-1');
     expect(headers.has('x-client-id')).toBe(false);
+  });
+
+  it('manages safe connection metadata through canonical paths', async () => {
+    const connection = {
+      configuration: {},
+      configurationSchemaVersion: 1,
+      connectorId: 'microsoft-business-central',
+      createdAt: '2026-07-23T00:00:00.000Z',
+      displayName: 'Finance BC',
+      health: 'UNKNOWN',
+      id: 'connection-1',
+      stateVersion: 0,
+      status: 'ACTIVE',
+      updatedAt: '2026-07-23T00:00:00.000Z',
+    };
+    const renamed = {
+      ...connection,
+      displayName: 'Finance Business Central',
+      stateVersion: 1,
+    };
+    const revoked = { ...renamed, stateVersion: 2, status: 'REVOKED' };
+    const fetchMock = jest
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(jsonResponse(connection))
+      .mockResolvedValueOnce(jsonResponse([connection]))
+      .mockResolvedValueOnce(jsonResponse(connection))
+      .mockResolvedValueOnce(jsonResponse(renamed))
+      .mockResolvedValueOnce(jsonResponse(revoked));
+    const client = new AiFlowClient('https://engine.example', () => 'token-1');
+
+    await client.createConnection({
+      connectorId: 'microsoft-business-central',
+      displayName: 'Finance BC',
+      idempotencyKey: 'create-connection-1',
+    });
+    await client.listConnections('microsoft-business-central');
+    await client.getConnection('connection-1');
+    await client.updateConnection({
+      connectionId: 'connection-1',
+      displayName: 'Finance Business Central',
+      expectedStateVersion: 0,
+      idempotencyKey: 'rename-connection-1',
+    });
+    await client.revokeConnection({
+      connectionId: 'connection-1',
+      idempotencyKey: 'revoke-connection-1',
+    });
+
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      'https://engine.example/api/v1/connections',
+      'https://engine.example/api/v1/connections?connectorId=microsoft-business-central',
+      'https://engine.example/api/v1/connections/connection-1',
+      'https://engine.example/api/v1/connections/connection-1',
+      'https://engine.example/api/v1/connections/connection-1',
+    ]);
+    expect(fetchMock.mock.calls.map(([, init]) => init?.method)).toEqual([
+      'POST',
+      undefined,
+      undefined,
+      'PATCH',
+      'DELETE',
+    ]);
+    expect(
+      new Headers(fetchMock.mock.calls[3]?.[1]?.headers).get('Idempotency-Key'),
+    ).toBe('rename-connection-1');
   });
 
   it('supports same-origin BFF authentication without exposing a browser token', async () => {

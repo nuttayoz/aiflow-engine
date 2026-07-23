@@ -296,6 +296,9 @@ Implemented Phase 3 slices:
 - Connector and extraction-profile list/detail catalogs with capability
   filtering, stable safe projections, explicit lookup errors, and typed client
   support for the existing wizard.
+- Tenant-scoped connection metadata create/list/get/rename/revoke APIs with
+  idempotency, audit, optimistic concurrency, immutable-version reference
+  guards, connector compatibility validation, and typed client/demo support.
 
 Exit criteria:
 

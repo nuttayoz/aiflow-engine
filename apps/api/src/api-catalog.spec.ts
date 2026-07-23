@@ -27,8 +27,14 @@ describe('API catalogs', () => {
     const service = createService();
 
     expect(service.connectorDescriptor('direct-upload')).toMatchObject({
+      actions: [expect.objectContaining({ connectionRequired: false })],
       connectorId: 'direct-upload',
       displayName: 'Direct upload',
+    });
+    expect(
+      service.connectorDescriptor('microsoft-business-central'),
+    ).toMatchObject({
+      actions: [expect.objectContaining({ connectionRequired: true })],
     });
     expect(() => service.connectorDescriptor('missing')).toThrow(
       'CONNECTOR_NOT_FOUND',
@@ -51,5 +57,39 @@ describe('API catalogs', () => {
     expect(() => service.extractionProfileDescriptor('missing')).toThrow(
       'EXTRACTION_PROFILE_NOT_FOUND',
     );
+  });
+
+  it('rejects connection shells for unsupported connectors and secret-shaped input', async () => {
+    const service = createService();
+    const authorization = {
+      actor: { id: 'user-1', type: 'USER' as const },
+      correlationId: 'correlation-1',
+      projectId: 'project-1',
+      tenantId: 'tenant-1',
+    };
+
+    await expect(
+      service.createConnection(
+        authorization,
+        {
+          configuration: {},
+          connectorId: 'direct-upload',
+          displayName: 'Invalid connection',
+        },
+        'connection-1',
+      ),
+    ).rejects.toThrow('CONNECTION_CONNECTOR_NOT_SUPPORTED');
+    await expect(
+      service.createConnection(
+        authorization,
+        {
+          configuration: {},
+          connectorId: 'microsoft-business-central',
+          displayName: 'Unsafe connection',
+          password: 'must-not-be-accepted',
+        },
+        'connection-2',
+      ),
+    ).rejects.toThrow('CONNECTION_INPUT_INVALID');
   });
 });

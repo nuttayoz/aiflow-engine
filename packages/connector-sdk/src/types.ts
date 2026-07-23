@@ -6,6 +6,7 @@ export type ConnectorJsonSchema = Readonly<Record<string, unknown>>;
 export interface ConnectorActionDescriptor {
   readonly actionId: string;
   readonly capability: ConnectorCapability;
+  readonly connectionRequired: boolean;
   readonly configurationSchema: ConnectorJsonSchema;
   readonly configurationSchemaVersion: number;
   readonly displayName: string;

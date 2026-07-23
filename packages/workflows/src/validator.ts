@@ -170,6 +170,24 @@ export class WorkflowDefinitionValidator {
     if (entry === undefined) {
       issues.push({ code: 'NOT_INSTALLED', path: '/entry/connectorId' });
     } else {
+      if (
+        entry.connectionRequired &&
+        definition.entry.connectionId === undefined
+      ) {
+        issues.push({
+          code: 'CONNECTION_REQUIRED',
+          path: '/entry/connectionId',
+        });
+      }
+      if (
+        !entry.connectionRequired &&
+        definition.entry.connectionId !== undefined
+      ) {
+        issues.push({
+          code: 'CONNECTION_NOT_ALLOWED',
+          path: '/entry/connectionId',
+        });
+      }
       const result = this.connectors.validateConfiguration(
         definition.entry.connectorId,
         entry.actionId,
@@ -201,6 +219,24 @@ export class WorkflowDefinitionValidator {
       issues.push({ code: 'NOT_INSTALLED', path: '/destination/actionId' });
     }
     if (destination !== undefined) {
+      if (
+        destination.connectionRequired &&
+        definition.destination.connectionId === undefined
+      ) {
+        issues.push({
+          code: 'CONNECTION_REQUIRED',
+          path: '/destination/connectionId',
+        });
+      }
+      if (
+        !destination.connectionRequired &&
+        definition.destination.connectionId !== undefined
+      ) {
+        issues.push({
+          code: 'CONNECTION_NOT_ALLOWED',
+          path: '/destination/connectionId',
+        });
+      }
       const result = this.connectors.validateConfiguration(
         definition.destination.connectorId,
         destination.actionId,

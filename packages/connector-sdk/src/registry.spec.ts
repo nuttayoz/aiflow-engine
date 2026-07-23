@@ -7,6 +7,7 @@ const connector: ConnectorAdapter = {
       {
         actionId: 'watch-folder',
         capability: 'ENTRY',
+        connectionRequired: true,
         configurationSchema: {
           additionalProperties: false,
           properties: { folderId: { minLength: 1, type: 'string' } },

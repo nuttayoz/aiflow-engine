@@ -13,6 +13,7 @@
     { "path": "../../packages/connectors/direct-upload" },
     { "path": "../../packages/connectors/microsoft-business-central" },
     { "path": "../../packages/connector-sdk" },
+    { "path": "../../packages/connections" },
     { "path": "../../packages/core" },
     { "path": "../../packages/database" },
     { "path": "../../packages/executions" },

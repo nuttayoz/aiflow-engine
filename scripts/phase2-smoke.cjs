@@ -104,12 +104,54 @@ const main = async () => {
     throw new Error('SMOKE_CATALOG_INVALID');
   }
 
+  const connectionKey = `connection-${runId}`;
+  const connection = await request('/api/v1/connections', {
+    body: JSON.stringify({
+      configuration: {},
+      connectorId: 'microsoft-business-central',
+      displayName: `Phase 2 Business Central ${runId}`,
+    }),
+    headers: { 'Idempotency-Key': connectionKey },
+    method: 'POST',
+  });
+  const replayedConnection = await request('/api/v1/connections', {
+    body: JSON.stringify({
+      configuration: {},
+      connectorId: 'microsoft-business-central',
+      displayName: `Phase 2 Business Central ${runId}`,
+    }),
+    headers: { 'Idempotency-Key': connectionKey },
+    method: 'POST',
+  });
+  const renamedConnection = await request(
+    `/api/v1/connections/${connection.id}`,
+    {
+      body: JSON.stringify({
+        displayName: `Phase 2 BC ${runId}`,
+        expectedStateVersion: connection.stateVersion,
+      }),
+      headers: { 'Idempotency-Key': `connection-update-${runId}` },
+      method: 'PATCH',
+    },
+  );
+  const visibleConnections = await request(
+    '/api/v1/connections?connectorId=microsoft-business-central',
+  );
+  if (
+    JSON.stringify(replayedConnection) !== JSON.stringify(connection) ||
+    renamedConnection.stateVersion !== connection.stateVersion + 1 ||
+    !visibleConnections.some((candidate) => candidate.id === connection.id)
+  ) {
+    throw new Error('SMOKE_CONNECTION_INVALID');
+  }
+
   const workflow = await request(`/api/v1/projects/${projectId}/workflows`, {
     body: JSON.stringify({
       definition: {
         destination: {
           actionId: 'create-purchase-invoice-draft',
           config: { companyId: 'phase2-demo-company' },
+          connectionId: connection.id,
           connectorId: 'microsoft-business-central',
         },
         entry: { config: {}, connectorId: 'direct-upload' },

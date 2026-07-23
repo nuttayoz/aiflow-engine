@@ -9,6 +9,7 @@ import {
   Inject,
   Param,
   ParseIntPipe,
+  Patch,
   Post,
   Put,
   Query,
@@ -60,6 +61,80 @@ export class ApiController {
   ) {
     requireAuthorization(request);
     return { data: this.service.extractionProfileDescriptor(profileId) };
+  }
+
+  @Post('connections')
+  async createConnection(
+    @Req() request: AuthorizedRequest,
+    @Body() body: unknown,
+    @Headers('idempotency-key') idempotencyKey: string | undefined,
+  ) {
+    return {
+      data: await this.service.createConnection(
+        requireAuthorization(request),
+        body,
+        idempotencyKey,
+      ),
+    };
+  }
+
+  @Get('connections')
+  async listConnections(
+    @Req() request: AuthorizedRequest,
+    @Query('connectorId') connectorId: string | undefined,
+  ) {
+    return {
+      data: await this.service.listConnections(
+        requireAuthorization(request),
+        connectorId,
+      ),
+      page: { nextCursor: null },
+    };
+  }
+
+  @Get('connections/:connectionId')
+  async getConnection(
+    @Req() request: AuthorizedRequest,
+    @Param('connectionId') connectionId: string,
+  ) {
+    return {
+      data: await this.service.getConnection(
+        requireAuthorization(request),
+        connectionId,
+      ),
+    };
+  }
+
+  @Patch('connections/:connectionId')
+  async updateConnection(
+    @Req() request: AuthorizedRequest,
+    @Param('connectionId') connectionId: string,
+    @Body() body: unknown,
+    @Headers('idempotency-key') idempotencyKey: string | undefined,
+  ) {
+    return {
+      data: await this.service.updateConnection(
+        requireAuthorization(request),
+        connectionId,
+        body,
+        idempotencyKey,
+      ),
+    };
+  }
+
+  @Delete('connections/:connectionId')
+  async revokeConnection(
+    @Req() request: AuthorizedRequest,
+    @Param('connectionId') connectionId: string,
+    @Headers('idempotency-key') idempotencyKey: string | undefined,
+  ) {
+    return {
+      data: await this.service.revokeConnection(
+        requireAuthorization(request),
+        connectionId,
+        idempotencyKey,
+      ),
+    };
   }
 
   @Post('projects/:projectId/workflows')

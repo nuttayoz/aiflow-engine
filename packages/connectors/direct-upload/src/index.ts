@@ -6,6 +6,7 @@ const descriptor = {
     {
       actionId: 'receive',
       capability: 'ENTRY',
+      connectionRequired: false,
       configurationSchema: {
         additionalProperties: false,
         properties: {},

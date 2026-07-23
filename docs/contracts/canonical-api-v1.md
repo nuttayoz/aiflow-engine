@@ -379,11 +379,24 @@ by the provisioning contract.
 
 Connection responses never expose refresh tokens, client secrets, encrypted provider blobs, presigned URLs, or raw secret-manager references.
 
+Connection create, rename, and revoke mutations require `Idempotency-Key`.
+Creation currently accepts safe shell metadata only (`connectorId`,
+`displayName`, and an empty server-versioned configuration object). `PATCH`
+renames with an `expectedStateVersion` optimistic-concurrency guard. `DELETE`
+soft-revokes an unreferenced connection; immutable workflow-version references
+return `409 CONNECTION_REFERENCE_CONFLICT`, and normal lists omit revoked
+records. OAuth consent, secret installation, live health validation, and
+provider resource browsing are separate provider-adapter operations and are not
+simulated by this metadata lifecycle.
+
 `GET /api/v1/connectors` accepts an optional `capability=ENTRY|DESTINATION`
 filter. The list and detail projections contain the same immutable installed
 descriptor fields, including connector/action versions and safe configuration
-schemas. Unknown connector/profile identifiers return `404`; an unsupported
-capability filter returns `400 CONNECTOR_CAPABILITY_INVALID`.
+schemas. Each action declares whether `connectionId` is required; workflow
+validation rejects both missing required connections and connections supplied
+to actions that do not use them. Unknown connector/profile identifiers return
+`404`; an unsupported capability filter returns
+`400 CONNECTOR_CAPABILITY_INVALID`.
 
 The initial built-in extraction-profile projection contains a safe
 `displayName`, stable profile/version identifiers, profile kind, output-field

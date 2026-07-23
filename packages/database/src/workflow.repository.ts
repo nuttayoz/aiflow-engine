@@ -83,6 +83,7 @@ const mapWorkflow = (row: WorkflowRow): WorkflowRecord => ({
 
 export class PostgresWorkflowRepository implements WorkflowRepository {
   private readonly auditEvents: string;
+  private readonly connections: string;
   private readonly connectionReferences: string;
   private readonly idempotency: string;
   private readonly operations: string;
@@ -95,6 +96,7 @@ export class PostgresWorkflowRepository implements WorkflowRepository {
     schema: string,
   ) {
     this.auditEvents = table(schema, 'audit_events');
+    this.connections = table(schema, 'connections');
     this.connectionReferences = table(
       schema,
       'workflow_version_connection_refs',
@@ -830,6 +832,31 @@ export class PostgresWorkflowRepository implements WorkflowRepository {
     definition: ValidatedWorkflowDefinition,
   ): Promise<void> {
     for (const reference of definition.connectionReferences) {
+      const binding =
+        reference.purpose === 'ENTRY'
+          ? definition.definition.entry
+          : definition.definition.destination;
+      if (binding.connectionId !== reference.connectionId) {
+        throw new Error('CONNECTION_REFERENCE_INVALID');
+      }
+      const rows = (await manager.query(
+        `
+          SELECT connector_id, status
+          FROM ${this.connections}
+          WHERE tenant_id = $1 AND id = $2
+        `,
+        [tenantId, reference.connectionId],
+      )) as { connector_id: string; status: string }[];
+      const connection = rows[0];
+      if (connection === undefined) {
+        throw new Error('CONNECTION_NOT_FOUND');
+      }
+      if (connection.connector_id !== binding.connectorId) {
+        throw new Error('CONNECTION_CONNECTOR_MISMATCH');
+      }
+      if (connection.status !== 'ACTIVE') {
+        throw new Error('CONNECTION_NOT_ACTIVE');
+      }
       await manager.query(
         `
           INSERT INTO ${this.connectionReferences} (
