@@ -9,6 +9,9 @@ import {
 export type FakeSharePointGraphBehavior =
   'SUCCEED' | 'THROTTLE' | 'TIMEOUT_AFTER_CREATE' | 'TIMEOUT_BEFORE_CREATE';
 
+export const FAKE_SHAREPOINT_ANY_CONNECTION_ID =
+  'fake-sharepoint-any-connection';
+
 interface StoredSubscription extends SharePointGraphSubscription {
   readonly connectionId: string;
 }
@@ -48,7 +51,8 @@ export class FakeSharePointGraphAdapter implements SharePointGraphPort {
     this.failBeforeRead();
     const target = this.targets.find(
       (candidate) =>
-        candidate.connectionId === input.connectionId &&
+        (candidate.connectionId === input.connectionId ||
+          candidate.connectionId === FAKE_SHAREPOINT_ANY_CONNECTION_ID) &&
         candidate.siteId === input.siteId &&
         candidate.driveId === input.driveId &&
         candidate.folderId === input.folderId,
@@ -161,15 +165,24 @@ export class FakeSharePointGraphAdapter implements SharePointGraphPort {
     this.failBeforeRead();
     const target = this.targets.find(
       (candidate) =>
-        candidate.connectionId === input.connectionId &&
+        (candidate.connectionId === input.connectionId ||
+          candidate.connectionId === FAKE_SHAREPOINT_ANY_CONNECTION_ID) &&
         candidate.driveId === input.driveId,
     );
     if (target === undefined) {
       throw new SharePointGraphError('GRAPH_NOT_FOUND');
     }
-    const page = this.deltaPages.get(
-      this.deltaKey(input.connectionId, input.driveId, input.cursor),
-    );
+    const page =
+      this.deltaPages.get(
+        this.deltaKey(input.connectionId, input.driveId, input.cursor),
+      ) ??
+      this.deltaPages.get(
+        this.deltaKey(
+          FAKE_SHAREPOINT_ANY_CONNECTION_ID,
+          input.driveId,
+          input.cursor,
+        ),
+      );
     if (page === undefined) {
       throw new SharePointGraphError('GRAPH_NOT_FOUND');
     }

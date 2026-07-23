@@ -4,6 +4,7 @@ import type {
   DatabaseRuntimeConfig,
   RabbitMqRuntimeConfig,
   S3RuntimeConfig,
+  SharePointRuntimeConfig,
 } from '@aiflow/config';
 import { DatabaseModule } from '@aiflow/database';
 import {
@@ -18,6 +19,7 @@ import {
   SYNTHETIC_STAGES_ENABLED,
   WORKER_QUEUE_NAMES,
   WORKER_S3_CONFIG,
+  WORKER_SHAREPOINT_CONFIG,
 } from './worker.tokens';
 
 export interface WorkerModuleOptions {
@@ -25,6 +27,7 @@ export interface WorkerModuleOptions {
   queueNames: readonly string[];
   rabbitMq: RabbitMqRuntimeConfig;
   s3: S3RuntimeConfig;
+  sharePoint: SharePointRuntimeConfig;
   syntheticStagesEnabled: boolean;
   telemetry: RuntimeTelemetry;
 }
@@ -50,6 +53,7 @@ export class WorkerModule {
         { provide: RuntimeTelemetry, useValue: options.telemetry },
         { provide: WORKER_QUEUE_NAMES, useValue: options.queueNames },
         { provide: WORKER_S3_CONFIG, useValue: options.s3 },
+        { provide: WORKER_SHAREPOINT_CONFIG, useValue: options.sharePoint },
         {
           provide: SYNTHETIC_STAGES_ENABLED,
           useValue: options.syntheticStagesEnabled,

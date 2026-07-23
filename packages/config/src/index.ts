@@ -82,6 +82,12 @@ export interface ObservabilityRuntimeConfig {
   sentryDsn?: string;
 }
 
+export interface SharePointRuntimeConfig {
+  callbackUrl: string;
+  currentKeyVersion: number;
+  rootKey: Uint8Array;
+}
+
 interface IntegerOptions {
   defaultValue: number;
   maximum: number;
@@ -479,5 +485,64 @@ export const loadObservabilityRuntimeConfig = (
       name: 'METRICS_PORT',
     }),
     ...(sentryDsn === undefined ? {} : { sentryDsn }),
+  };
+};
+
+export const loadSharePointRuntimeConfig = (
+  environment: NodeJS.ProcessEnv = process.env,
+): SharePointRuntimeConfig => {
+  const nodeEnvironment = readEnum(
+    'NODE_ENV',
+    environment.NODE_ENV,
+    NODE_ENVIRONMENTS,
+    'development',
+  );
+  const encodedKey = environment.SHAREPOINT_ROOT_KEY_BASE64?.trim();
+  if (encodedKey === undefined || !/^[A-Za-z0-9+/]+={0,2}$/u.test(encodedKey)) {
+    throw new ConfigurationError(
+      'SHAREPOINT_ROOT_KEY_BASE64 must be valid base64',
+    );
+  }
+  const rootKey = Buffer.from(encodedKey, 'base64');
+  if (rootKey.byteLength < 32 || rootKey.byteLength > 64) {
+    throw new ConfigurationError(
+      'SHAREPOINT_ROOT_KEY_BASE64 must decode to 32-64 bytes',
+    );
+  }
+  const callbackValue = environment.SHAREPOINT_CALLBACK_URL?.trim();
+  if (callbackValue === undefined) {
+    throw new ConfigurationError('SHAREPOINT_CALLBACK_URL is required');
+  }
+  let callbackUrl: string;
+  try {
+    const parsed = new URL(callbackValue);
+    if (
+      !['http:', 'https:'].includes(parsed.protocol) ||
+      (nodeEnvironment === 'production' && parsed.protocol !== 'https:') ||
+      parsed.username.length > 0 ||
+      parsed.password.length > 0 ||
+      parsed.search.length > 0 ||
+      parsed.hash.length > 0 ||
+      parsed.pathname !== '/provider-callbacks/v1/microsoft-graph/sharepoint'
+    ) {
+      throw new Error('invalid callback');
+    }
+    callbackUrl = parsed.toString();
+  } catch {
+    throw new ConfigurationError(
+      nodeEnvironment === 'production'
+        ? 'SHAREPOINT_CALLBACK_URL must be the public HTTPS SharePoint callback'
+        : 'SHAREPOINT_CALLBACK_URL must be the SharePoint callback URL',
+    );
+  }
+  return {
+    callbackUrl,
+    currentKeyVersion: readInteger(environment.SHAREPOINT_KEY_VERSION, {
+      defaultValue: 1,
+      maximum: 2_147_483_647,
+      minimum: 1,
+      name: 'SHAREPOINT_KEY_VERSION',
+    }),
+    rootKey: new Uint8Array(rootKey),
   };
 };

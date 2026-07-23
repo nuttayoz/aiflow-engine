@@ -14,12 +14,20 @@ import {
   microsoftBusinessCentralConnector,
 } from '@aiflow/connector-microsoft-business-central';
 import { directUploadConnector } from '@aiflow/connector-direct-upload';
+import {
+  AesGcmSharePointCursorProtector,
+  FAKE_SHAREPOINT_ANY_CONNECTION_ID,
+  FakeSharePointGraphAdapter,
+  microsoftSharePointConnector,
+  SharePointManagedEntryProvisioner,
+} from '@aiflow/connector-microsoft-sharepoint';
 import { phase1SyntheticConnector } from '@aiflow/connector-phase1-synthetic';
 import { ConnectorRegistry } from '@aiflow/connector-sdk';
 import {
   DatabaseService,
   PostgresExecutionRepository,
   PostgresPipelineRepository,
+  PostgresSharePointProvisioningRepository,
   PostgresWorkflowProvisioningRepository,
   PostgresWorkflowRepository,
 } from '@aiflow/database';
@@ -41,11 +49,13 @@ import { WorkflowProvisioningService } from '@aiflow/workflows';
 import { RuntimeTelemetry } from '@aiflow/observability';
 import { S3ObjectStorage } from '@aiflow/storage';
 import type { S3RuntimeConfig } from '@aiflow/config';
+import type { SharePointRuntimeConfig } from '@aiflow/config';
 
 import {
   SYNTHETIC_STAGES_ENABLED,
   WORKER_QUEUE_NAMES,
   WORKER_S3_CONFIG,
+  WORKER_SHAREPOINT_CONFIG,
 } from './worker.tokens';
 
 const MESSAGE_TYPES = [
@@ -90,6 +100,8 @@ export class FoundationWorkerService
     @Inject(SYNTHETIC_STAGES_ENABLED)
     private readonly syntheticStagesEnabled: boolean,
     @Inject(WORKER_S3_CONFIG) private readonly s3Config: S3RuntimeConfig,
+    @Inject(WORKER_SHAREPOINT_CONFIG)
+    private readonly sharePointConfig: SharePointRuntimeConfig,
     @Inject(RuntimeTelemetry) private readonly telemetry: RuntimeTelemetry,
   ) {}
 
@@ -148,8 +160,12 @@ export class FoundationWorkerService
       new ConnectorRegistry([
         directUploadConnector,
         microsoftBusinessCentralConnector,
+        microsoftSharePointConnector,
         phase1SyntheticConnector,
       ]),
+      this.syntheticStagesEnabled
+        ? [this.createFakeSharePointProvisioner(schema)]
+        : [],
     );
 
     await Promise.all(
@@ -289,5 +305,50 @@ export class FoundationWorkerService
       throw new Error('WORKER_NOT_READY');
     }
     return this.mapping;
+  }
+
+  private createFakeSharePointProvisioner(
+    schema: string,
+  ): SharePointManagedEntryProvisioner {
+    const key = {
+      keyVersion: this.sharePointConfig.currentKeyVersion,
+      rootKey: this.sharePointConfig.rootKey,
+    };
+    const target = {
+      connectionId: FAKE_SHAREPOINT_ANY_CONNECTION_ID,
+      driveId: 'demo-sharepoint-drive',
+      externalTenantId: 'demo-microsoft-tenant',
+      folderId: 'demo-sharepoint-inbound',
+      rootItemId: 'demo-sharepoint-root',
+      siteId: 'demo-sharepoint-site',
+    };
+    const graph = new FakeSharePointGraphAdapter([target]);
+    graph.setDeltaPage(target.connectionId, target.driveId, undefined, {
+      finalCursor: 'fake-baseline-delta-cursor',
+      items: [
+        {
+          eTag: 'fake-folder-etag',
+          id: target.folderId,
+          kind: 'FOLDER',
+          name: 'Inbound',
+          parentId: target.rootItemId,
+        },
+      ],
+    });
+    const repository = new PostgresSharePointProvisioningRepository(
+      this.database.dataSource,
+      schema,
+      new AesGcmSharePointCursorProtector(
+        [key],
+        this.sharePointConfig.currentKeyVersion,
+      ),
+    );
+    return new SharePointManagedEntryProvisioner(
+      repository,
+      graph,
+      [key],
+      this.sharePointConfig.currentKeyVersion,
+      this.sharePointConfig.callbackUrl,
+    );
   }
 }
