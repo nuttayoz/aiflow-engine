@@ -7,6 +7,8 @@ import type {
   ClaimProvisioningOperationInput,
   ProvisioningOperationRecord,
   RequestWorkflowActivationInput,
+  RequestWorkflowDeactivationInput,
+  WorkflowDeactivationResult,
   WorkflowProvisioningRepository,
 } from '@aiflow/workflows';
 
@@ -33,6 +35,14 @@ interface OperationRow {
   tenant_id: string;
   updated_at: Date | string;
   workflow_id: string;
+}
+
+interface WorkflowActivationRow {
+  accepting_new_documents: boolean;
+  active_version_id: string | null;
+  cleanup_required: boolean;
+  health: WorkflowDeactivationResult['health'];
+  status: 'ACTIVE' | 'ARCHIVED' | 'INACTIVE';
 }
 
 const operationColumns = `
@@ -96,6 +106,40 @@ const requestFingerprint = (input: RequestWorkflowActivationInput): string =>
       }),
     )
     .digest('hex');
+
+const deactivationFingerprint = (
+  input: RequestWorkflowDeactivationInput,
+): string =>
+  createHash('sha256')
+    .update(
+      JSON.stringify({
+        projectId: input.projectId,
+        workflowId: input.workflowId,
+      }),
+    )
+    .digest('hex');
+
+const parseDeactivationResult = (
+  value: unknown,
+): WorkflowDeactivationResult => {
+  const parsed =
+    typeof value === 'string' ? (JSON.parse(value) as unknown) : value;
+  if (
+    parsed === null ||
+    typeof parsed !== 'object' ||
+    !('workflowId' in parsed) ||
+    typeof parsed.workflowId !== 'string' ||
+    !('acceptingNewDocuments' in parsed) ||
+    typeof parsed.acceptingNewDocuments !== 'boolean' ||
+    !('cleanupRequired' in parsed) ||
+    typeof parsed.cleanupRequired !== 'boolean' ||
+    !('health' in parsed) ||
+    !['DEGRADED', 'HEALTHY', 'UNKNOWN'].includes(String(parsed.health))
+  ) {
+    throw new Error('WORKFLOW_DEACTIVATION_IDEMPOTENCY_INCONSISTENT');
+  }
+  return parsed as unknown as WorkflowDeactivationResult;
+};
 
 export class PostgresWorkflowProvisioningRepository implements WorkflowProvisioningRepository {
   private readonly auditEvents: string;
@@ -182,6 +226,7 @@ export class PostgresWorkflowProvisioningRepository implements WorkflowProvision
         `
           SELECT
             workflow.active_version_id,
+            workflow.status AS workflow_status,
             version.definition_hash
           FROM ${this.workflows} AS workflow
           JOIN ${this.versions} AS version
@@ -202,10 +247,29 @@ export class PostgresWorkflowProvisioningRepository implements WorkflowProvision
       )) as {
         active_version_id: string | null;
         definition_hash: string;
+        workflow_status: 'ACTIVE' | 'ARCHIVED' | 'INACTIVE';
       }[];
       const target = targets[0];
       if (target === undefined) {
         throw new Error('WORKFLOW_VERSION_NOT_FOUND');
+      }
+      if (target.workflow_status === 'ARCHIVED') {
+        throw new Error('WORKFLOW_ARCHIVED');
+      }
+
+      const current = (await manager.query(
+        `
+          SELECT id
+          FROM ${this.operations}
+          WHERE tenant_id = $1
+            AND workflow_id = $2
+            AND status IN ('PENDING', 'RUNNING', 'WAITING_RETRY', 'RECONCILING')
+          LIMIT 1
+        `,
+        [input.tenantId, input.workflowId],
+      )) as { id: string }[];
+      if (current.length > 0) {
+        throw new Error('WORKFLOW_PROVISIONING_IN_PROGRESS');
       }
 
       await manager.query(
@@ -271,6 +335,189 @@ export class PostgresWorkflowProvisioningRepository implements WorkflowProvision
       throw new Error('PROVISIONING_OPERATION_INCONSISTENT');
     }
     return operation;
+  }
+
+  async requestDeactivation(
+    input: RequestWorkflowDeactivationInput,
+  ): Promise<WorkflowDeactivationResult> {
+    if (
+      input.idempotencyKey.trim().length === 0 ||
+      input.idempotencyKey.length > 256
+    ) {
+      throw new Error('IDEMPOTENCY_KEY_INVALID');
+    }
+    const fingerprint = deactivationFingerprint(input);
+
+    return this.dataSource.transaction(async (manager) => {
+      const workflows = (await manager.query(
+        `
+          SELECT
+            active_version_id,
+            accepting_new_documents,
+            cleanup_required,
+            health,
+            status
+          FROM ${this.workflows}
+          WHERE tenant_id = $1 AND project_id = $2 AND id = $3
+          FOR UPDATE
+        `,
+        [input.tenantId, input.projectId, input.workflowId],
+      )) as WorkflowActivationRow[];
+      const workflow = workflows[0];
+      if (workflow === undefined) {
+        throw new Error('WORKFLOW_NOT_FOUND');
+      }
+
+      const existing = (await manager.query(
+        `
+          SELECT request_fingerprint, response
+          FROM ${this.idempotency}
+          WHERE tenant_id = $1
+            AND operation_scope = 'workflow.deactivate'
+            AND idempotency_key = $2
+          FOR UPDATE
+        `,
+        [input.tenantId, input.idempotencyKey],
+      )) as { request_fingerprint: string; response: unknown }[];
+      if (existing[0] !== undefined) {
+        if (existing[0].request_fingerprint !== fingerprint) {
+          throw new Error('IDEMPOTENCY_KEY_REUSED');
+        }
+        return parseDeactivationResult(existing[0].response);
+      }
+      if (workflow.status === 'ARCHIVED') {
+        throw new Error('WORKFLOW_ARCHIVED');
+      }
+
+      const current = (await manager.query(
+        `
+          SELECT id
+          FROM ${this.operations}
+          WHERE tenant_id = $1
+            AND workflow_id = $2
+            AND status IN ('PENDING', 'RUNNING', 'WAITING_RETRY', 'RECONCILING')
+          LIMIT 1
+          FOR UPDATE
+        `,
+        [input.tenantId, input.workflowId],
+      )) as { id: string }[];
+      if (current.length > 0) {
+        throw new Error('WORKFLOW_PROVISIONING_IN_PROGRESS');
+      }
+      if (workflow.cleanup_required) {
+        throw new Error('WORKFLOW_DEACTIVATION_CLEANUP_UNAVAILABLE');
+      }
+
+      const changed =
+        workflow.status === 'ACTIVE' ||
+        workflow.active_version_id !== null ||
+        workflow.accepting_new_documents;
+      if (changed) {
+        await manager.query(
+          `
+            UPDATE ${this.workflows}
+            SET active_version_id = NULL,
+                accepting_new_documents = false,
+                cleanup_required = false,
+                health = 'UNKNOWN',
+                status = 'INACTIVE',
+                state_version = state_version + 1,
+                updated_at = clock_timestamp()
+            WHERE tenant_id = $1 AND project_id = $2 AND id = $3
+          `,
+          [input.tenantId, input.projectId, input.workflowId],
+        );
+      }
+
+      const result: WorkflowDeactivationResult = {
+        acceptingNewDocuments: false,
+        cleanupRequired: false,
+        health: changed ? 'UNKNOWN' : workflow.health,
+        workflowId: input.workflowId,
+      };
+      const inserted = (await manager.query(
+        `
+          INSERT INTO ${this.idempotency} (
+            id,
+            tenant_id,
+            operation_scope,
+            idempotency_key,
+            request_fingerprint,
+            status,
+            resource_type,
+            resource_id,
+            response,
+            completed_at,
+            expires_at
+          ) VALUES (
+            $1, $2, 'workflow.deactivate', $3, $4, 'COMPLETED',
+            'WORKFLOW', $5, $6::jsonb, clock_timestamp(),
+            clock_timestamp() + interval '90 days'
+          )
+          ON CONFLICT (tenant_id, operation_scope, idempotency_key) DO NOTHING
+          RETURNING id
+        `,
+        [
+          randomUUID(),
+          input.tenantId,
+          input.idempotencyKey,
+          fingerprint,
+          input.workflowId,
+          JSON.stringify(result),
+        ],
+      )) as { id: string }[];
+      if (inserted.length === 0) {
+        const concurrent = (await manager.query(
+          `
+            SELECT request_fingerprint, response
+            FROM ${this.idempotency}
+            WHERE tenant_id = $1
+              AND operation_scope = 'workflow.deactivate'
+              AND idempotency_key = $2
+            FOR UPDATE
+          `,
+          [input.tenantId, input.idempotencyKey],
+        )) as { request_fingerprint: string; response: unknown }[];
+        if (concurrent[0]?.request_fingerprint !== fingerprint) {
+          throw new Error('IDEMPOTENCY_KEY_REUSED');
+        }
+        return parseDeactivationResult(concurrent[0]?.response);
+      }
+
+      await manager.query(
+        `
+          INSERT INTO ${this.auditEvents} (
+            id,
+            tenant_id,
+            project_id,
+            actor_type,
+            actor_id,
+            action,
+            resource_type,
+            resource_id,
+            outcome,
+            correlation_id,
+            causation_id,
+            workflow_version_id
+          ) VALUES ($1, $2, $3, $4, $5, $6, 'WORKFLOW', $7, 'SUCCEEDED', $8, $9, $10)
+        `,
+        [
+          randomUUID(),
+          input.tenantId,
+          input.projectId,
+          input.actor.type,
+          input.actor.id,
+          changed
+            ? 'workflow.deactivation.complete'
+            : 'workflow.deactivation.noop',
+          input.workflowId,
+          input.correlationId,
+          input.causationId,
+          workflow.active_version_id,
+        ],
+      );
+      return result;
+    });
   }
 
   async claim(
@@ -487,6 +734,25 @@ export class PostgresWorkflowProvisioningRepository implements WorkflowProvision
       [tenantId, operationId],
     )) as OperationRow[];
 
+    return rows[0] === undefined ? undefined : mapOperation(rows[0]);
+  }
+
+  async findCurrentByWorkflow(
+    tenantId: string,
+    workflowId: string,
+  ): Promise<ProvisioningOperationRecord | undefined> {
+    const rows = (await this.dataSource.query(
+      `
+        SELECT ${operationColumns}
+        FROM ${this.operations}
+        WHERE tenant_id = $1
+          AND workflow_id = $2
+          AND status IN ('PENDING', 'RUNNING', 'WAITING_RETRY', 'RECONCILING')
+        ORDER BY created_at DESC, id DESC
+        LIMIT 1
+      `,
+      [tenantId, workflowId],
+    )) as OperationRow[];
     return rows[0] === undefined ? undefined : mapOperation(rows[0]);
   }
 

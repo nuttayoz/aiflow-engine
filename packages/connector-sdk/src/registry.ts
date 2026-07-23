@@ -87,6 +87,14 @@ export class ConnectorRegistry {
       .sort((left, right) => left.connectorId.localeCompare(right.connectorId));
   }
 
+  descriptorsWithCapability(
+    capability: ConnectorActionDescriptor['capability'],
+  ): readonly ConnectorDescriptor[] {
+    return this.descriptors().filter((descriptor) =>
+      descriptor.actions.some((action) => action.capability === capability),
+    );
+  }
+
   get(connectorId: string): ConnectorAdapter | undefined {
     return this.connectors.get(connectorId)?.adapter;
   }

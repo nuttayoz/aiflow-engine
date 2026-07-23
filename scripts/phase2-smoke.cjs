@@ -85,12 +85,73 @@ const main = async () => {
     (response) => response.ok,
   );
 
+  const entryConnectors = await request('/api/v1/connectors?capability=ENTRY');
+  const directUploadDescriptor = await request(
+    '/api/v1/connectors/direct-upload',
+  );
+  const extractionProfiles = await request('/api/v1/extraction-profiles');
+  const invoiceProfile = await request(
+    '/api/v1/extraction-profiles/invoice-basic',
+  );
+  if (
+    entryConnectors.length !== 1 ||
+    entryConnectors[0]?.connectorId !== 'direct-upload' ||
+    directUploadDescriptor.actions[0]?.capability !== 'ENTRY' ||
+    extractionProfiles.length !== 1 ||
+    extractionProfiles[0]?.profileId !== 'invoice-basic' ||
+    invoiceProfile.displayName !== 'Basic invoice'
+  ) {
+    throw new Error('SMOKE_CATALOG_INVALID');
+  }
+
+  const connectionKey = `connection-${runId}`;
+  const connection = await request('/api/v1/connections', {
+    body: JSON.stringify({
+      configuration: {},
+      connectorId: 'microsoft-business-central',
+      displayName: `Phase 2 Business Central ${runId}`,
+    }),
+    headers: { 'Idempotency-Key': connectionKey },
+    method: 'POST',
+  });
+  const replayedConnection = await request('/api/v1/connections', {
+    body: JSON.stringify({
+      configuration: {},
+      connectorId: 'microsoft-business-central',
+      displayName: `Phase 2 Business Central ${runId}`,
+    }),
+    headers: { 'Idempotency-Key': connectionKey },
+    method: 'POST',
+  });
+  const renamedConnection = await request(
+    `/api/v1/connections/${connection.id}`,
+    {
+      body: JSON.stringify({
+        displayName: `Phase 2 BC ${runId}`,
+        expectedStateVersion: connection.stateVersion,
+      }),
+      headers: { 'Idempotency-Key': `connection-update-${runId}` },
+      method: 'PATCH',
+    },
+  );
+  const visibleConnections = await request(
+    '/api/v1/connections?connectorId=microsoft-business-central',
+  );
+  if (
+    JSON.stringify(replayedConnection) !== JSON.stringify(connection) ||
+    renamedConnection.stateVersion !== connection.stateVersion + 1 ||
+    !visibleConnections.some((candidate) => candidate.id === connection.id)
+  ) {
+    throw new Error('SMOKE_CONNECTION_INVALID');
+  }
+
   const workflow = await request(`/api/v1/projects/${projectId}/workflows`, {
     body: JSON.stringify({
       definition: {
         destination: {
           actionId: 'create-purchase-invoice-draft',
           config: { companyId: 'phase2-demo-company' },
+          connectionId: connection.id,
           connectorId: 'microsoft-business-central',
         },
         entry: { config: {}, connectorId: 'direct-upload' },
@@ -163,30 +224,31 @@ const main = async () => {
     throw new Error('SMOKE_UPLOAD_PLAN_UNEXPECTED');
   }
   const uploadHeaderNames = Object.keys(upload.plan.headers).join(',');
-  const preflight = await fetch(upload.plan.url, {
-    headers: {
-      'Access-Control-Request-Headers': uploadHeaderNames,
-      'Access-Control-Request-Method': 'PUT',
-      Origin: 'http://localhost:4173',
-    },
-    method: 'OPTIONS',
-  });
-  const allowedHeaders = preflight.headers
-    .get('access-control-allow-headers')
-    ?.toLowerCase();
-  if (
-    !preflight.ok ||
-    preflight.headers.get('access-control-allow-origin') !==
-      'http://localhost:4173' ||
-    Object.keys(upload.plan.headers).some(
-      (header) =>
-        !allowedHeaders
-          ?.split(',')
-          .map((item) => item.trim())
-          .includes(header),
-    )
-  ) {
-    throw new Error('SMOKE_STORAGE_CORS_PREFLIGHT_FAILED');
+  for (const origin of ['http://localhost:3001', 'http://localhost:4173']) {
+    const preflight = await fetch(upload.plan.url, {
+      headers: {
+        'Access-Control-Request-Headers': uploadHeaderNames,
+        'Access-Control-Request-Method': 'PUT',
+        Origin: origin,
+      },
+      method: 'OPTIONS',
+    });
+    const allowedHeaders = preflight.headers
+      .get('access-control-allow-headers')
+      ?.toLowerCase();
+    if (
+      !preflight.ok ||
+      preflight.headers.get('access-control-allow-origin') !== origin ||
+      Object.keys(upload.plan.headers).some(
+        (header) =>
+          !allowedHeaders
+            ?.split(',')
+            .map((item) => item.trim())
+            .includes(header),
+      )
+    ) {
+      throw new Error('SMOKE_STORAGE_CORS_PREFLIGHT_FAILED');
+    }
   }
   const transfer = await fetch(upload.plan.url, {
     body: document,
@@ -220,6 +282,81 @@ const main = async () => {
   if (execution.status !== 'SUCCEEDED') {
     throw new Error(execution.failure?.code ?? 'PHASE2_EXECUTION_FAILED');
   }
+  const activeState = await request(
+    `/api/v1/workflows/${workflow.id}/activation`,
+  );
+  if (
+    activeState.activeVersionId !== workflow.latestVersion.id ||
+    !activeState.acceptingNewDocuments ||
+    activeState.operation !== null
+  ) {
+    throw new Error('SMOKE_ACTIVATION_PROJECTION_INVALID');
+  }
+  const deactivationKey = `deactivation-${runId}`;
+  const deactivated = await request(
+    `/api/v1/workflows/${workflow.id}/activation`,
+    {
+      headers: { 'Idempotency-Key': deactivationKey },
+      method: 'DELETE',
+    },
+  );
+  const replayedDeactivation = await request(
+    `/api/v1/workflows/${workflow.id}/activation`,
+    {
+      headers: { 'Idempotency-Key': deactivationKey },
+      method: 'DELETE',
+    },
+  );
+  if (
+    deactivated.activeVersionId !== null ||
+    deactivated.acceptingNewDocuments ||
+    JSON.stringify(replayedDeactivation) !== JSON.stringify(deactivated)
+  ) {
+    throw new Error('SMOKE_DEACTIVATION_INVALID');
+  }
+  const closedUploadResponse = await fetch(
+    `${baseUrl}/api/v1/workflows/${workflow.id}/upload-sessions`,
+    {
+      body: JSON.stringify({
+        checksum: { algorithm: 'SHA256', value: checksum },
+        contentType: 'application/pdf',
+        originalFilename: 'closed-workflow.pdf',
+        sizeBytes: document.length,
+      }),
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        'Idempotency-Key': `closed-upload-${runId}`,
+      },
+      method: 'POST',
+    },
+  );
+  const closedUploadBody = await closedUploadResponse.json();
+  if (
+    closedUploadResponse.ok ||
+    closedUploadBody.error?.code !== 'WORKFLOW_NOT_ACCEPTING_DOCUMENTS'
+  ) {
+    throw new Error('SMOKE_DEACTIVATION_GATE_FAILED');
+  }
+  const archiveKey = `archive-${runId}`;
+  const archived = await request(`/api/v1/workflows/${workflow.id}`, {
+    headers: { 'Idempotency-Key': archiveKey },
+    method: 'DELETE',
+  });
+  const replayedArchive = await request(`/api/v1/workflows/${workflow.id}`, {
+    headers: { 'Idempotency-Key': archiveKey },
+    method: 'DELETE',
+  });
+  const visibleWorkflows = await request(
+    `/api/v1/projects/${projectId}/workflows`,
+  );
+  if (
+    archived.status !== 'ARCHIVED' ||
+    JSON.stringify(replayedArchive) !== JSON.stringify(archived) ||
+    visibleWorkflows.some((candidate) => candidate.id === workflow.id)
+  ) {
+    throw new Error('SMOKE_WORKFLOW_ARCHIVE_FAILED');
+  }
   process.stdout.write(
     `${JSON.stringify(
       {
@@ -229,6 +366,8 @@ const main = async () => {
           status,
         })),
         status: execution.status,
+        workflowArchived: archived.status === 'ARCHIVED',
+        workflowAcceptingNewDocuments: deactivated.acceptingNewDocuments,
         workflowId: workflow.id,
       },
       null,

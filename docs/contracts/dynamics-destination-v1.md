@@ -76,6 +76,14 @@ A `Connection` contains safe tenant-owned configuration plus an approved externa
 | `capabilityVersion`               | Last verified connector/action capability version                         |
 | `lastValidatedAt`, `nextCheckAt`  | Health/permission validation timing                                       |
 
+The Phase 3 metadata lifecycle intentionally creates only an empty,
+server-versioned Business Central connection shell with a display name. It does
+not accept credentials, arbitrary endpoints, external tenant/environment
+values, or claim successful Microsoft authorization. Those fields become
+connector-owned configuration only after the exact SaaS consent and secret
+ownership decisions are approved. Shell create/rename/revoke remains
+tenant-scoped, idempotent, audited, and safe to consume from DevPortal.
+
 Companies are browsed through `GET /api/v1/connections/:connectionId/resources` and returned as opaque provider-resource IDs plus safe display labels. Business Central online uses its company GUID as the adapter resource reference. A workflow stores the selected company reference in destination config; it never stores only a mutable company name.
 
 Connection creation/authorization and workflow activation validate outside a database transaction that:

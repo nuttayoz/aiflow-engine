@@ -1,3 +1,45 @@
+export type ConnectorCapability = 'DESTINATION' | 'ENTRY';
+
+export interface ConnectorActionView {
+  readonly actionId: string;
+  readonly capability: ConnectorCapability;
+  readonly connectionRequired: boolean;
+  readonly configurationSchema: Readonly<Record<string, unknown>>;
+  readonly configurationSchemaVersion: number;
+  readonly displayName: string;
+  readonly provisioningMode: 'MANAGED' | 'NONE' | 'VALIDATE_ONLY';
+  readonly version: number;
+}
+
+export interface ConnectorView {
+  readonly actions: readonly ConnectorActionView[];
+  readonly connectorId: string;
+  readonly displayName: string;
+  readonly version: number;
+}
+
+export interface ExtractionProfileView {
+  readonly displayName: string;
+  readonly outputFields: readonly string[];
+  readonly outputSchemaHash: string;
+  readonly profileId: string;
+  readonly profileKind: 'CUSTOM' | 'SYSTEM';
+  readonly profileVersionId: string;
+}
+
+export interface ConnectionView {
+  readonly configuration: Readonly<Record<string, unknown>>;
+  readonly configurationSchemaVersion: number;
+  readonly connectorId: string;
+  readonly createdAt: string;
+  readonly displayName: string;
+  readonly health: 'DEGRADED' | 'HEALTHY' | 'UNKNOWN';
+  readonly id: string;
+  readonly stateVersion: number;
+  readonly status: 'ACTIVE' | 'DISABLED' | 'REVOKED';
+  readonly updatedAt: string;
+}
+
 export interface WorkflowDefinitionV1 {
   readonly schemaVersion: 1;
   readonly entry: {
@@ -28,6 +70,7 @@ export interface WorkflowDefinitionV1 {
 export interface WorkflowView {
   readonly acceptingNewDocuments: boolean;
   readonly activeVersionId: string | null;
+  readonly cleanupRequired: boolean;
   readonly health: string;
   readonly id: string;
   readonly latestVersion: {
@@ -38,6 +81,57 @@ export interface WorkflowView {
   readonly name: string;
   readonly projectId: string;
   readonly status: string;
+}
+
+export interface WorkflowVersionView {
+  readonly createdAt: string;
+  readonly createdBy: {
+    readonly id: string;
+    readonly type: 'SERVICE' | 'SYSTEM' | 'USER';
+  };
+  readonly definition: WorkflowDefinitionV1;
+  readonly definitionHash: string;
+  readonly id: string;
+  readonly profileReference: {
+    readonly outputSchemaHash: string;
+    readonly profileId: string;
+    readonly profileKind: 'CUSTOM' | 'SYSTEM';
+    readonly profileVersionId: string;
+  };
+  readonly schemaVersion: 1;
+  readonly status: 'VALID';
+  readonly versionNumber: number;
+  readonly workflowId: string;
+}
+
+export interface ProvisioningOperationView {
+  readonly activeVersionId: string | null;
+  readonly createdAt: string;
+  readonly currentStep:
+    'DEPROVISION' | 'PROVISION' | 'RECONCILE' | 'SWITCH' | 'VALIDATE';
+  readonly failure: null;
+  readonly id: string;
+  readonly kind: 'ACTIVATE' | 'DEACTIVATE';
+  readonly status:
+    | 'FAILED'
+    | 'PENDING'
+    | 'RECONCILING'
+    | 'RUNNING'
+    | 'SUCCEEDED'
+    | 'WAITING_RETRY';
+  readonly targetVersionId: string | null;
+  readonly updatedAt: string;
+  readonly workflowId: string;
+}
+
+export interface WorkflowActivationView {
+  readonly acceptingNewDocuments: boolean;
+  readonly activeVersionId: string | null;
+  readonly cleanupRequired: boolean;
+  readonly health: 'DEGRADED' | 'HEALTHY' | 'UNKNOWN';
+  readonly operation: ProvisioningOperationView | null;
+  readonly targetVersionId: string | null;
+  readonly workflowId: string;
 }
 
 export interface UploadPlan {
@@ -66,6 +160,7 @@ export interface ExecutionView {
   }[];
   readonly currentStage: string;
   readonly executionId: string;
+  readonly originalFilename: string | null;
   readonly failure: {
     readonly category: string;
     readonly code: string;
@@ -106,8 +201,105 @@ const sha256Base64 = async (value: Blob | ArrayBuffer): Promise<string> => {
 export class AiFlowClient {
   constructor(
     private readonly baseUrl: string,
-    private readonly accessToken: () => string,
+    private readonly accessToken?: () => string | undefined,
   ) {}
+
+  listConnectors(
+    capability?: ConnectorCapability,
+  ): Promise<readonly ConnectorView[]> {
+    const query =
+      capability === undefined
+        ? ''
+        : `?capability=${encodeURIComponent(capability)}`;
+    return this.requestList(`/api/v1/connectors${query}`);
+  }
+
+  getConnector(connectorId: string): Promise<ConnectorView> {
+    return this.request(
+      `/api/v1/connectors/${encodeURIComponent(connectorId)}`,
+    );
+  }
+
+  listExtractionProfiles(): Promise<readonly ExtractionProfileView[]> {
+    return this.requestList('/api/v1/extraction-profiles');
+  }
+
+  getExtractionProfile(profileId: string): Promise<ExtractionProfileView> {
+    return this.request(
+      `/api/v1/extraction-profiles/${encodeURIComponent(profileId)}`,
+    );
+  }
+
+  createConnection(input: {
+    readonly connectorId: string;
+    readonly displayName: string;
+    readonly idempotencyKey?: string;
+  }): Promise<ConnectionView> {
+    return this.request('/api/v1/connections', {
+      body: JSON.stringify({
+        configuration: {},
+        connectorId: input.connectorId,
+        displayName: input.displayName,
+      }),
+      headers: {
+        'Idempotency-Key':
+          input.idempotencyKey ?? randomKey('connection-create'),
+      },
+      method: 'POST',
+    });
+  }
+
+  listConnections(connectorId?: string): Promise<readonly ConnectionView[]> {
+    const query =
+      connectorId === undefined
+        ? ''
+        : `?connectorId=${encodeURIComponent(connectorId)}`;
+    return this.requestList(`/api/v1/connections${query}`);
+  }
+
+  getConnection(connectionId: string): Promise<ConnectionView> {
+    return this.request(
+      `/api/v1/connections/${encodeURIComponent(connectionId)}`,
+    );
+  }
+
+  updateConnection(input: {
+    readonly connectionId: string;
+    readonly displayName: string;
+    readonly expectedStateVersion: number;
+    readonly idempotencyKey?: string;
+  }): Promise<ConnectionView> {
+    return this.request(
+      `/api/v1/connections/${encodeURIComponent(input.connectionId)}`,
+      {
+        body: JSON.stringify({
+          displayName: input.displayName,
+          expectedStateVersion: input.expectedStateVersion,
+        }),
+        headers: {
+          'Idempotency-Key':
+            input.idempotencyKey ?? randomKey('connection-update'),
+        },
+        method: 'PATCH',
+      },
+    );
+  }
+
+  revokeConnection(input: {
+    readonly connectionId: string;
+    readonly idempotencyKey?: string;
+  }): Promise<ConnectionView> {
+    return this.request(
+      `/api/v1/connections/${encodeURIComponent(input.connectionId)}`,
+      {
+        headers: {
+          'Idempotency-Key':
+            input.idempotencyKey ?? randomKey('connection-revoke'),
+        },
+        method: 'DELETE',
+      },
+    );
+  }
 
   listWorkflows(projectId: string): Promise<readonly WorkflowView[]> {
     return this.requestList(
@@ -136,11 +328,70 @@ export class AiFlowClient {
     );
   }
 
+  getWorkflow(workflowId: string): Promise<WorkflowView> {
+    return this.request(`/api/v1/workflows/${encodeURIComponent(workflowId)}`);
+  }
+
+  archiveWorkflow(input: {
+    readonly idempotencyKey?: string;
+    readonly workflowId: string;
+  }): Promise<WorkflowView> {
+    return this.request(
+      `/api/v1/workflows/${encodeURIComponent(input.workflowId)}`,
+      {
+        headers: {
+          'Idempotency-Key':
+            input.idempotencyKey ?? randomKey('workflow-archive'),
+        },
+        method: 'DELETE',
+      },
+    );
+  }
+
+  createWorkflowVersion(input: {
+    readonly basedOnVersionId: string;
+    readonly definition: WorkflowDefinitionV1;
+    readonly idempotencyKey?: string;
+    readonly workflowId: string;
+  }): Promise<WorkflowVersionView> {
+    return this.request(
+      `/api/v1/workflows/${encodeURIComponent(input.workflowId)}/versions`,
+      {
+        body: JSON.stringify({
+          basedOnVersionId: input.basedOnVersionId,
+          definition: input.definition,
+        }),
+        headers: {
+          'Idempotency-Key':
+            input.idempotencyKey ?? randomKey('workflow-version'),
+        },
+        method: 'POST',
+      },
+    );
+  }
+
+  listWorkflowVersions(
+    workflowId: string,
+  ): Promise<readonly WorkflowVersionView[]> {
+    return this.requestList(
+      `/api/v1/workflows/${encodeURIComponent(workflowId)}/versions`,
+    );
+  }
+
+  getWorkflowVersion(
+    workflowId: string,
+    versionId: string,
+  ): Promise<WorkflowVersionView> {
+    return this.request(
+      `/api/v1/workflows/${encodeURIComponent(workflowId)}/versions/${encodeURIComponent(versionId)}`,
+    );
+  }
+
   activateWorkflow(input: {
     readonly workflowId: string;
     readonly versionId: string;
     readonly idempotencyKey?: string;
-  }): Promise<{ readonly id: string; readonly status: string }> {
+  }): Promise<ProvisioningOperationView> {
     return this.request(
       `/api/v1/workflows/${encodeURIComponent(input.workflowId)}/activation`,
       {
@@ -155,9 +406,31 @@ export class AiFlowClient {
 
   getProvisioningOperation(
     operationId: string,
-  ): Promise<{ readonly id: string; readonly status: string }> {
+  ): Promise<ProvisioningOperationView> {
     return this.request(
       `/api/v1/provisioning-operations/${encodeURIComponent(operationId)}`,
+    );
+  }
+
+  getWorkflowActivation(workflowId: string): Promise<WorkflowActivationView> {
+    return this.request(
+      `/api/v1/workflows/${encodeURIComponent(workflowId)}/activation`,
+    );
+  }
+
+  deactivateWorkflow(input: {
+    readonly idempotencyKey?: string;
+    readonly workflowId: string;
+  }): Promise<WorkflowActivationView> {
+    return this.request(
+      `/api/v1/workflows/${encodeURIComponent(input.workflowId)}/activation`,
+      {
+        headers: {
+          'Idempotency-Key':
+            input.idempotencyKey ?? randomKey('workflow-deactivation'),
+        },
+        method: 'DELETE',
+      },
     );
   }
 
@@ -288,13 +561,17 @@ export class AiFlowClient {
   }
 
   private async raw(path: string, init: RequestInit = {}): Promise<Response> {
+    const headers = new Headers(init.headers);
+    const token = this.accessToken?.()?.trim();
+    if (token && !headers.has('Authorization')) {
+      headers.set('Authorization', `Bearer ${token}`);
+    }
+    if (init.body !== undefined && !headers.has('Content-Type')) {
+      headers.set('Content-Type', 'application/json');
+    }
     const response = await fetch(`${this.baseUrl.replace(/\/$/u, '')}${path}`, {
       ...init,
-      headers: {
-        Authorization: `Bearer ${this.accessToken()}`,
-        'Content-Type': 'application/json',
-        ...init.headers,
-      },
+      headers,
     });
     if (!response.ok) {
       const body = (await response.json()) as {

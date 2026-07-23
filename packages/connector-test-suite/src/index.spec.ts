@@ -8,6 +8,7 @@ const validConnector: ConnectorAdapter = {
       {
         actionId: 'receive',
         capability: 'ENTRY',
+        connectionRequired: false,
         configurationSchema: {
           additionalProperties: false,
           properties: {},

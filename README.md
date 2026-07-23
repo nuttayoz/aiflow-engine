@@ -7,7 +7,12 @@ effective-once Microsoft Business Central draft action. SharePoint, human
 review, real provider adapters, and the existing DevPortal migration remain in
 later roadmap phases.
 
-The existing DevPortal frontend is not part of this repository and will not be rebuilt. Its AiFlow screens will call this engine's canonical APIs directly. `devportal-backend` remains responsible for its existing non-AiFlow features and temporary legacy traffic, but it is not part of the new AiFlow runtime path.
+The existing `devportal-frontend` repository is not part of this repository and
+will not be rebuilt. Its AiFlow screens call this engine's canonical APIs
+through the frontend's same-origin Next.js BFF and the platform API gateway;
+presigned document transfer goes directly from the browser to S3.
+`devportal-backend` remains responsible for its existing non-AiFlow features and
+temporary legacy traffic, but it is not part of the new AiFlow runtime path.
 
 ## Runtime roles
 

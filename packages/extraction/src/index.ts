@@ -2,6 +2,7 @@ import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 import type { Readable } from 'node:stream';
 
 export interface ExtractionProfileDescriptor {
+  readonly displayName: string;
   readonly outputFields: readonly string[];
   readonly outputSchemaHash: string;
   readonly profileId: string;
@@ -11,6 +12,7 @@ export interface ExtractionProfileDescriptor {
 
 export const PHASE2_INVOICE_PROFILE: ExtractionProfileDescriptor =
   Object.freeze({
+    displayName: 'Basic invoice',
     outputFields: [
       'currency_code',
       'invoice_date',

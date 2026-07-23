@@ -7,6 +7,7 @@ const connector: ConnectorAdapter = {
       {
         actionId: 'watch-folder',
         capability: 'ENTRY',
+        connectionRequired: true,
         configurationSchema: {
           additionalProperties: false,
           properties: { folderId: { minLength: 1, type: 'string' } },
@@ -50,6 +51,15 @@ describe('ConnectorRegistry', () => {
     expect(connectorCapabilityHash(connector.descriptor)).toBe(
       connectorCapabilityHash({ ...connector.descriptor }),
     );
+  });
+
+  it('filters descriptors by installed capability', () => {
+    const registry = new ConnectorRegistry([connector]);
+
+    expect(registry.descriptorsWithCapability('ENTRY')).toEqual([
+      connector.descriptor,
+    ]);
+    expect(registry.descriptorsWithCapability('DESTINATION')).toEqual([]);
   });
 
   it('rejects duplicate connectors and secret-shaped schemas', () => {

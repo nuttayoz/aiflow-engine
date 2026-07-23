@@ -8,12 +8,14 @@ const connector = (
   connectorId: string,
   capability: 'DESTINATION' | 'ENTRY',
   actionId: string,
+  connectionRequired = false,
 ): ConnectorAdapter => ({
   descriptor: {
     actions: [
       {
         actionId,
         capability,
+        connectionRequired,
         configurationSchema: {
           additionalProperties: false,
           properties: {},
@@ -38,10 +40,11 @@ const connector = (
 const validator = new WorkflowDefinitionValidator(
   new ConnectorRegistry([
     connector('direct-upload', 'ENTRY', 'receive'),
-    connector('test-destination', 'DESTINATION', 'deliver'),
+    connector('test-destination', 'DESTINATION', 'deliver', true),
   ]),
   new InMemoryExtractionProfileCatalog([
     {
+      displayName: 'Invoice',
       outputFields: ['invoice_number'],
       outputSchemaHash: 'schema-hash',
       profileId: 'invoice',
@@ -55,6 +58,7 @@ const definition = {
   destination: {
     actionId: 'deliver',
     config: {},
+    connectionId: 'connection-1',
     connectorId: 'test-destination',
   },
   entry: { config: {}, connectorId: 'direct-upload' },
@@ -77,9 +81,46 @@ describe('WorkflowDefinitionValidator', () => {
     expect(result).toMatchObject({
       valid: true,
       value: {
+        connectionReferences: [
+          { connectionId: 'connection-1', purpose: 'DESTINATION' },
+        ],
         definitionHash: expect.stringMatching(/^[a-f0-9]{64}$/u),
         profileReference: { profileVersionId: 'invoice-v1' },
       },
+    });
+  });
+
+  it('enforces connector-owned connection requirements', () => {
+    expect(
+      validator.validate({
+        ...definition,
+        destination: {
+          ...definition.destination,
+          connectionId: undefined,
+        },
+      }),
+    ).toMatchObject({
+      issues: [
+        {
+          code: 'CONNECTION_REQUIRED',
+          path: '/destination/connectionId',
+        },
+      ],
+      valid: false,
+    });
+    expect(
+      validator.validate({
+        ...definition,
+        entry: { ...definition.entry, connectionId: 'not-allowed' },
+      }),
+    ).toMatchObject({
+      issues: [
+        {
+          code: 'CONNECTION_NOT_ALLOWED',
+          path: '/entry/connectionId',
+        },
+      ],
+      valid: false,
     });
   });
 

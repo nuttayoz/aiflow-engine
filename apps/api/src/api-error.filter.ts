@@ -11,6 +11,9 @@ const statusFor = (code: string): number => {
   if (code === 'AUTHENTICATION_REQUIRED') return 401;
   if (code.includes('CONFLICT') || code === 'IDEMPOTENCY_KEY_REUSED')
     return 409;
+  if (code.endsWith('_IN_PROGRESS')) return 409;
+  if (code.endsWith('_ARCHIVED')) return 409;
+  if (code.includes('NOT_ACCEPTING')) return 409;
   if (code.includes('NOT_ALLOWED')) return 409;
   if (code.includes('UNAVAILABLE')) return 503;
   return 400;

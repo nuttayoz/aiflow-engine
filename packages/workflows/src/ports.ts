@@ -5,6 +5,7 @@ import type { ValidatedWorkflowDefinition } from './definition';
 export interface WorkflowRecord {
   readonly acceptingNewDocuments: boolean;
   readonly activeVersionId?: string;
+  readonly cleanupRequired: boolean;
   readonly createdAt: Date;
   readonly health: 'DEGRADED' | 'HEALTHY' | 'UNKNOWN';
   readonly id: string;
@@ -39,11 +40,37 @@ export interface CreateWorkflowInput {
   readonly workflowId: string;
 }
 
+export interface CreateWorkflowVersionInput {
+  readonly actor: ActorIdentity;
+  readonly basedOnVersionId: string;
+  readonly causationId: string;
+  readonly correlationId: string;
+  readonly definition: ValidatedWorkflowDefinition;
+  readonly idempotencyKey: string;
+  readonly tenantId: string;
+  readonly versionId: string;
+  readonly workflowId: string;
+}
+
+export interface ArchiveWorkflowInput {
+  readonly actor: ActorIdentity;
+  readonly causationId: string;
+  readonly correlationId: string;
+  readonly idempotencyKey: string;
+  readonly projectId: string;
+  readonly tenantId: string;
+  readonly workflowId: string;
+}
+
 export interface WorkflowRepository {
+  archive(input: ArchiveWorkflowInput): Promise<WorkflowRecord>;
   create(input: CreateWorkflowInput): Promise<{
     readonly version: WorkflowVersionRecord;
     readonly workflow: WorkflowRecord;
   }>;
+  createVersion(
+    input: CreateWorkflowVersionInput,
+  ): Promise<WorkflowVersionRecord>;
   findById(
     tenantId: string,
     workflowId: string,
@@ -57,6 +84,11 @@ export interface WorkflowRepository {
     tenantId: string,
     workflowId: string,
   ): Promise<WorkflowVersionRecord | undefined>;
+  listVersions(
+    tenantId: string,
+    workflowId: string,
+    limit?: number,
+  ): Promise<readonly WorkflowVersionRecord[]>;
   listByProject(
     tenantId: string,
     projectId: string,
@@ -106,6 +138,24 @@ export interface RequestWorkflowActivationInput {
   readonly workflowId: string;
 }
 
+export interface RequestWorkflowDeactivationInput {
+  readonly actor: ActorIdentity;
+  readonly causationId: string;
+  readonly correlationId: string;
+  readonly idempotencyKey: string;
+  readonly projectId: string;
+  readonly tenantId: string;
+  readonly workflowId: string;
+}
+
+export interface WorkflowDeactivationResult {
+  readonly acceptingNewDocuments: boolean;
+  readonly activeVersionId?: string;
+  readonly cleanupRequired: boolean;
+  readonly health: WorkflowRecord['health'];
+  readonly workflowId: string;
+}
+
 export interface ClaimProvisioningOperationInput {
   readonly consumerName: string;
   readonly expectedStateVersion: number;
@@ -132,7 +182,14 @@ export interface WorkflowProvisioningRepository {
     tenantId: string,
     operationId: string,
   ): Promise<ProvisioningOperationRecord | undefined>;
+  findCurrentByWorkflow(
+    tenantId: string,
+    workflowId: string,
+  ): Promise<ProvisioningOperationRecord | undefined>;
   requestActivation(
     input: RequestWorkflowActivationInput,
   ): Promise<ProvisioningOperationRecord>;
+  requestDeactivation(
+    input: RequestWorkflowDeactivationInput,
+  ): Promise<WorkflowDeactivationResult>;
 }

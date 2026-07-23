@@ -28,7 +28,10 @@ client.put_bucket_cors(
                     "x-amz-server-side-encryption",
                 ],
                 "AllowedMethods": ["PUT"],
-                "AllowedOrigins": ["http://localhost:4173"],
+                "AllowedOrigins": [
+                    "http://localhost:3001",
+                    "http://localhost:4173",
+                ],
                 "ExposeHeaders": ["ETag", "x-amz-checksum-sha256"],
                 "MaxAgeSeconds": 300,
             }

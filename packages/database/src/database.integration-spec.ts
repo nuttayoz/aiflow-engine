@@ -240,6 +240,20 @@ describe('PostgreSQL foundation', () => {
     };
     const requested = await provisioning.requestActivation(activationInput);
     await expect(
+      provisioning.findCurrentByWorkflow(tenantId, workflowId),
+    ).resolves.toMatchObject({ id: requested.id, status: 'PENDING' });
+    await expect(
+      provisioning.requestDeactivation({
+        actor: { id: 'user-a', type: 'USER' },
+        causationId: 'deactivate-during-activation',
+        correlationId: 'correlation-a',
+        idempotencyKey: 'deactivate-during-activation',
+        projectId,
+        tenantId,
+        workflowId,
+      }),
+    ).rejects.toThrow('WORKFLOW_PROVISIONING_IN_PROGRESS');
+    await expect(
       provisioning.requestActivation({
         ...activationInput,
         operationId: randomUUID(),
@@ -274,6 +288,9 @@ describe('PostgreSQL foundation', () => {
       operationId: requested.id,
       tenantId,
     });
+    await expect(
+      provisioning.findCurrentByWorkflow(tenantId, workflowId),
+    ).resolves.toBeUndefined();
     await expect(
       workflows.findById(tenantId, workflowId),
     ).resolves.toMatchObject({
@@ -564,6 +581,386 @@ describe('PostgreSQL foundation', () => {
     });
   });
 
+  it('closes workflow intake immediately and replays deactivation idempotently', async () => {
+    const workflows = new PostgresWorkflowRepository(
+      runtimeDataSource,
+      runtimeConfig.schema,
+    );
+    const provisioning = new PostgresWorkflowProvisioningRepository(
+      runtimeDataSource,
+      runtimeConfig.schema,
+    );
+    const tenantId = 'tenant-deactivation';
+    const projectId = 'project-deactivation';
+    const workflowId = randomUUID();
+    const versionId = randomUUID();
+    await workflows.create({
+      actor: { id: 'user-a', type: 'USER' },
+      causationId: 'create-deactivation-workflow',
+      correlationId: 'deactivation-correlation',
+      definition: validatedDefinition,
+      name: 'Deactivation workflow',
+      projectId,
+      tenantId,
+      versionId,
+      workflowId,
+    });
+
+    const operationId = randomUUID();
+    const operation = await provisioning.requestActivation({
+      actor: { id: 'user-a', type: 'USER' },
+      causationId: 'activate-deactivation-workflow',
+      correlationId: 'deactivation-correlation',
+      idempotencyKey: 'activate-deactivation-workflow',
+      operationId,
+      projectId,
+      targetVersionId: versionId,
+      tenantId,
+      workflowId,
+    });
+    const claimed = await provisioning.claim({
+      consumerName: 'provisioning-worker',
+      expectedStateVersion: operation.stateVersion,
+      leaseDurationMs: 30_000,
+      leaseOwner: 'deactivation-worker',
+      messageId: 'deactivation-activation-message',
+      messageType: 'aiflow.workflow.provisioning.requested.v1',
+      operationId,
+      projectId,
+      tenantId,
+    });
+    if (claimed === undefined) {
+      throw new Error('expected claimed activation');
+    }
+    await provisioning.completeActivation({
+      expectedStateVersion: claimed.stateVersion,
+      leaseOwner: 'deactivation-worker',
+      operationId,
+      tenantId,
+    });
+    await expect(
+      workflows.archive({
+        actor: { id: 'user-a', type: 'USER' },
+        causationId: 'archive-active-workflow',
+        correlationId: 'deactivation-correlation',
+        idempotencyKey: 'archive-active-workflow',
+        projectId,
+        tenantId,
+        workflowId,
+      }),
+    ).rejects.toThrow('WORKFLOW_ARCHIVE_NOT_ALLOWED');
+
+    const deactivationInput = {
+      actor: { id: 'user-a', type: 'USER' as const },
+      causationId: 'deactivate-workflow',
+      correlationId: 'deactivation-correlation',
+      idempotencyKey: 'deactivate-workflow-once',
+      projectId,
+      tenantId,
+      workflowId,
+    };
+    const deactivated =
+      await provisioning.requestDeactivation(deactivationInput);
+    expect(deactivated).toEqual({
+      acceptingNewDocuments: false,
+      cleanupRequired: false,
+      health: 'UNKNOWN',
+      workflowId,
+    });
+    await expect(
+      provisioning.requestDeactivation(deactivationInput),
+    ).resolves.toEqual(deactivated);
+    const stored = await workflows.findById(tenantId, workflowId);
+    expect(stored).toMatchObject({
+      acceptingNewDocuments: false,
+      cleanupRequired: false,
+      health: 'UNKNOWN',
+      status: 'INACTIVE',
+    });
+    expect(stored?.activeVersionId).toBeUndefined();
+    await expect(
+      provisioning.requestDeactivation({
+        ...deactivationInput,
+        causationId: 'deactivate-workflow-again',
+        idempotencyKey: 'deactivate-workflow-again',
+      }),
+    ).resolves.toEqual(deactivated);
+
+    const archiveInput = {
+      actor: { id: 'user-a', type: 'USER' as const },
+      causationId: 'archive-workflow',
+      correlationId: 'deactivation-correlation',
+      idempotencyKey: 'archive-workflow-once',
+      projectId,
+      tenantId,
+      workflowId,
+    };
+    await expect(workflows.archive(archiveInput)).resolves.toMatchObject({
+      id: workflowId,
+      status: 'ARCHIVED',
+    });
+    await expect(workflows.archive(archiveInput)).resolves.toMatchObject({
+      id: workflowId,
+      status: 'ARCHIVED',
+    });
+    await expect(workflows.listByProject(tenantId, projectId)).resolves.toEqual(
+      [],
+    );
+    await expect(
+      workflows.listVersions(tenantId, workflowId),
+    ).resolves.toHaveLength(1);
+    await expect(
+      workflows.createVersion({
+        actor: { id: 'user-a', type: 'USER' },
+        basedOnVersionId: versionId,
+        causationId: 'edit-archived-workflow',
+        correlationId: 'deactivation-correlation',
+        definition: validatedDefinition,
+        idempotencyKey: 'edit-archived-workflow',
+        tenantId,
+        versionId: randomUUID(),
+        workflowId,
+      }),
+    ).rejects.toThrow('WORKFLOW_ARCHIVED');
+    await expect(
+      provisioning.requestActivation({
+        actor: { id: 'user-a', type: 'USER' },
+        causationId: 'activate-archived-workflow',
+        correlationId: 'deactivation-correlation',
+        idempotencyKey: 'activate-archived-workflow',
+        operationId: randomUUID(),
+        projectId,
+        targetVersionId: versionId,
+        tenantId,
+        workflowId,
+      }),
+    ).rejects.toThrow('WORKFLOW_ARCHIVED');
+  });
+
+  it('creates immutable workflow versions idempotently with optimistic edit context', async () => {
+    const workflows = new PostgresWorkflowRepository(
+      runtimeDataSource,
+      runtimeConfig.schema,
+    );
+    const tenantId = 'tenant-workflow-version';
+    const workflowId = randomUUID();
+    const firstVersionId = randomUUID();
+    await workflows.create({
+      actor: { id: 'user-a', type: 'USER' },
+      causationId: 'create-versioned-workflow',
+      correlationId: 'version-correlation',
+      definition: validatedDefinition,
+      name: 'Versioned workflow',
+      projectId: 'project-a',
+      tenantId,
+      versionId: firstVersionId,
+      workflowId,
+    });
+
+    const revisedDefinition: ValidatedWorkflowDefinition = {
+      ...validatedDefinition,
+      definition: {
+        ...validatedDefinition.definition,
+        mappings: [
+          {
+            required: true,
+            sourceField: 'value',
+            targetField: 'value',
+          },
+        ],
+      },
+      definitionHash: 'c'.repeat(64),
+    };
+    const secondVersionId = randomUUID();
+    const createInput = {
+      actor: { id: 'user-a', type: 'USER' as const },
+      basedOnVersionId: firstVersionId,
+      causationId: 'edit-versioned-workflow',
+      correlationId: 'version-correlation',
+      definition: revisedDefinition,
+      idempotencyKey: 'edit-versioned-workflow-once',
+      tenantId,
+      versionId: secondVersionId,
+      workflowId,
+    };
+    await expect(workflows.createVersion(createInput)).resolves.toMatchObject({
+      id: secondVersionId,
+      versionNumber: 2,
+      workflowId,
+    });
+    await expect(
+      workflows.createVersion({ ...createInput, versionId: randomUUID() }),
+    ).resolves.toMatchObject({ id: secondVersionId, versionNumber: 2 });
+    await expect(workflows.listVersions(tenantId, workflowId)).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: firstVersionId, versionNumber: 1 }),
+        expect.objectContaining({ id: secondVersionId, versionNumber: 2 }),
+      ]),
+    );
+    await expect(
+      workflows.createVersion({
+        ...createInput,
+        idempotencyKey: 'stale-edit',
+        versionId: randomUUID(),
+      }),
+    ).rejects.toThrow('WORKFLOW_VERSION_CONFLICT');
+    await expect(
+      workflows.createVersion({
+        ...createInput,
+        definition: validatedDefinition,
+        versionId: randomUUID(),
+      }),
+    ).rejects.toThrow('IDEMPOTENCY_KEY_REUSED');
+    await expect(
+      workflows.listVersions('different-tenant', workflowId),
+    ).resolves.toEqual([]);
+  });
+
+  it('manages idempotent tenant-scoped connection metadata', async () => {
+    const connections = new PostgresConnectionRepository(
+      runtimeDataSource,
+      runtimeConfig.schema,
+    );
+    const tenantId = 'connection-tenant';
+    const connectionId = randomUUID();
+    const createInput = {
+      actor: { id: 'user-a', type: 'USER' as const },
+      causationId: 'connection-create',
+      configuration: {},
+      configurationSchemaVersion: 1,
+      connectorId: 'synthetic',
+      correlationId: 'connection-correlation',
+      displayName: 'Initial connection',
+      id: connectionId,
+      idempotencyKey: 'connection-create-once',
+      tenantId,
+    };
+
+    await expect(connections.create(createInput)).resolves.toMatchObject({
+      displayName: 'Initial connection',
+      id: connectionId,
+      stateVersion: 0,
+      status: 'ACTIVE',
+    });
+    await expect(
+      connections.create({ ...createInput, id: randomUUID() }),
+    ).resolves.toMatchObject({ id: connectionId });
+    await expect(
+      connections.create({
+        ...createInput,
+        displayName: 'Conflicting replay',
+        id: randomUUID(),
+      }),
+    ).rejects.toThrow('IDEMPOTENCY_KEY_REUSED');
+    await expect(connections.list(tenantId, 'synthetic')).resolves.toHaveLength(
+      1,
+    );
+    await expect(
+      connections.list('different-tenant', 'synthetic'),
+    ).resolves.toEqual([]);
+
+    const updateInput = {
+      actor: createInput.actor,
+      causationId: 'connection-update',
+      connectionId,
+      correlationId: 'connection-correlation',
+      displayName: 'Renamed connection',
+      expectedStateVersion: 0,
+      idempotencyKey: 'connection-update-once',
+      tenantId,
+    };
+    await expect(connections.update(updateInput)).resolves.toMatchObject({
+      displayName: 'Renamed connection',
+      stateVersion: 1,
+    });
+    await expect(connections.update(updateInput)).resolves.toMatchObject({
+      displayName: 'Renamed connection',
+      stateVersion: 1,
+    });
+    await expect(
+      connections.update({
+        ...updateInput,
+        idempotencyKey: 'connection-update-stale',
+      }),
+    ).rejects.toThrow('CONNECTION_VERSION_CONFLICT');
+
+    const revokeInput = {
+      actor: createInput.actor,
+      causationId: 'connection-revoke',
+      connectionId,
+      correlationId: 'connection-correlation',
+      idempotencyKey: 'connection-revoke-once',
+      tenantId,
+    };
+    await expect(connections.revoke(revokeInput)).resolves.toMatchObject({
+      stateVersion: 2,
+      status: 'REVOKED',
+    });
+    await expect(connections.revoke(revokeInput)).resolves.toMatchObject({
+      stateVersion: 2,
+      status: 'REVOKED',
+    });
+    await expect(connections.list(tenantId)).resolves.toEqual([]);
+  });
+
+  it('prevents connection revocation while immutable versions reference it', async () => {
+    const connections = new PostgresConnectionRepository(
+      runtimeDataSource,
+      runtimeConfig.schema,
+    );
+    const workflows = new PostgresWorkflowRepository(
+      runtimeDataSource,
+      runtimeConfig.schema,
+    );
+    const tenantId = 'referenced-connection-tenant';
+    const connectionId = randomUUID();
+    const actor = { id: 'user-a', type: 'USER' as const };
+    await connections.create({
+      actor,
+      causationId: 'referenced-connection-create',
+      configuration: {},
+      configurationSchemaVersion: 1,
+      connectorId: 'synthetic',
+      correlationId: 'referenced-connection-correlation',
+      displayName: 'Referenced connection',
+      id: connectionId,
+      idempotencyKey: 'referenced-connection-create',
+      tenantId,
+    });
+    await workflows.create({
+      actor,
+      causationId: 'referenced-workflow-create',
+      correlationId: 'referenced-workflow-correlation',
+      definition: {
+        ...validatedDefinition,
+        connectionReferences: [{ connectionId, purpose: 'DESTINATION' }],
+        definition: {
+          ...validatedDefinition.definition,
+          destination: {
+            ...validatedDefinition.definition.destination,
+            connectionId,
+          },
+        },
+      },
+      name: 'Referenced connection workflow',
+      projectId: 'project-a',
+      tenantId,
+      versionId: randomUUID(),
+      workflowId: randomUUID(),
+    });
+
+    await expect(
+      connections.revoke({
+        actor,
+        causationId: 'referenced-connection-revoke',
+        connectionId,
+        correlationId: 'referenced-connection-correlation',
+        idempotencyKey: 'referenced-connection-revoke',
+        tenantId,
+      }),
+    ).rejects.toThrow('CONNECTION_REFERENCE_CONFLICT');
+  });
+
   it('enforces tenant ownership in composite foreign keys', async () => {
     const connections = new PostgresConnectionRepository(
       runtimeDataSource,
@@ -575,11 +972,15 @@ describe('PostgreSQL foundation', () => {
     );
     const foreignConnectionId = randomUUID();
     await connections.create({
+      actor: { id: 'user-b', type: 'USER' },
+      causationId: 'cross-tenant-connection',
       configuration: {},
       configurationSchemaVersion: 1,
       connectorId: 'synthetic',
+      correlationId: 'cross-tenant-connection',
       displayName: 'Tenant B destination',
       id: foreignConnectionId,
+      idempotencyKey: 'cross-tenant-connection',
       tenantId: 'tenant-b',
     });
     await expect(

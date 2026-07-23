@@ -27,6 +27,14 @@ The 2026-07-16 workspace snapshot contains application repositories but no produ
 | `devportal-backend`         | `c546a2fdedf2`                                                                                    |
 | `devportal`                 | `2fc93d8ba136`                                                                                    |
 
+This table is historical Phase 0B evidence. The active Phase 3 compatibility
+target was corrected on 2026-07-22 to `devportal-frontend` at
+`f1c9a9bad23c`, based on `origin/feature/new-uxui`; the active backend evidence
+is `devportal-backend` at `4b74f99c5370`, based on `origin/develop`. See
+[`devportal-compatibility.md`](devportal-compatibility.md) for the current
+frontend boundary. The old `devportal` checkout is not an implementation
+target.
+
 The engine version targets are defined by [ADR-0001](../decisions/0001-current-stable-versions.md), but the versions actually available from the operated platform, topology, backup guarantees, KEDA availability, S3/KMS/IAM conventions, and authentication claims cannot be proven from this workspace. They remain platform inputs rather than application assumptions.
 
 ## Confirmed project baseline

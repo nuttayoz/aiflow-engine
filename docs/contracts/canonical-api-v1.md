@@ -2,14 +2,16 @@
 
 Status: initial Phase 0B contract, 2026-07-14.
 
-This contract defines the API that the existing DevPortal will call directly for new AiFlow functionality. It is independent of n8n, legacy DevPortal workflow payloads, and any specific connector vendor.
+This contract defines the API that the existing DevPortal consumes through its
+same-origin Next.js BFF for new AiFlow functionality. It is independent of n8n,
+legacy DevPortal workflow payloads, and any specific connector vendor.
 
 The machine-readable workflow-definition envelope is [`schemas/workflow-definition.v1.schema.json`](schemas/workflow-definition.v1.schema.json).
 
 ## Decisions
 
 - Public base path: `/api/v1`.
-- DevPortal calls AiFlow Engine directly through the platform API gateway.
+- DevPortal calls AiFlow Engine through its same-origin Next.js BFF and the platform API gateway; document transfer uses only returned presigned S3 capabilities.
 - All identifiers are opaque strings. Clients must not parse or infer meaning from them.
 - Workflow configuration is immutable and versioned.
 - Workflow activation is separate from draft creation or editing because connector provisioning may be asynchronous.
@@ -32,7 +34,7 @@ Changing a workflow creates a new workflow version. It does not change the HTTP 
 
 ## Authentication and request headers
 
-All DevPortal requests require:
+All BFF-to-engine requests require:
 
 ```http
 Authorization: Bearer <access-token>
@@ -154,7 +156,7 @@ Adding this connector requires a new descriptor, implementation, and contract te
 | `GET /api/v1/projects/:projectId/workflows`             | List project workflows                                         |
 | `GET /api/v1/workflows/:workflowId`                     | Get workflow metadata and version summary                      |
 | `PATCH /api/v1/workflows/:workflowId`                   | Change workflow display metadata only                          |
-| `DELETE /api/v1/workflows/:workflowId`                  | Archive/delete according to retention policy                   |
+| `DELETE /api/v1/workflows/:workflowId`                  | Soft-archive an inactive workflow while retaining history      |
 | `POST /api/v1/workflows/:workflowId/versions`           | Create a new immutable draft version                           |
 | `GET /api/v1/workflows/:workflowId/versions`            | List workflow versions                                         |
 | `GET /api/v1/workflows/:workflowId/versions/:versionId` | Get one immutable version                                      |
@@ -266,6 +268,57 @@ Idempotency-Key: edit-invoice-intake-02
 
 The abbreviated nested objects above represent a complete definition conforming to the schema. `basedOnVersionId` provides optimistic edit context. The server rejects a stale edit when the agreed concurrency rule is violated.
 
+Successful response:
+
+```json
+{
+  "data": {
+    "id": "new-version-id",
+    "workflowId": "workflow-id",
+    "versionNumber": 2,
+    "schemaVersion": 1,
+    "status": "VALID",
+    "definition": {},
+    "definitionHash": "sha256-hex",
+    "profileReference": {
+      "profileId": "general-invoice",
+      "profileVersionId": "general-invoice-v1",
+      "profileKind": "SYSTEM",
+      "outputSchemaHash": "sha256-hex"
+    },
+    "createdBy": {
+      "id": "actor-id",
+      "type": "USER"
+    },
+    "createdAt": "2026-07-22T08:00:00.000Z"
+  }
+}
+```
+
+The repository serializes version creation per workflow. Reusing the same
+idempotency key and payload returns the original version; changing the payload
+with that key returns `IDEMPOTENCY_KEY_REUSED`. A different request based on a
+non-latest version returns `WORKFLOW_VERSION_CONFLICT` and never creates a
+partial version or reference projection.
+
+### Archive a workflow
+
+The initial removal policy is deliberately archive-only:
+
+```http
+DELETE /api/v1/workflows/workflow-id
+Authorization: Bearer <token>
+Idempotency-Key: archive-invoice-intake
+```
+
+Archive requires the workflow to be inactive with no open provisioning
+operation or managed cleanup. It sets `status: "ARCHIVED"` and removes the
+workflow from normal project lists while retaining immutable versions,
+executions, documents, provisioning history, and audit facts. An active
+workflow returns `409 WORKFLOW_ARCHIVE_NOT_ALLOWED`; the user must deactivate it
+first. Reusing the same key is idempotent. Hard deletion is not exposed by API
+v1.
+
 ### Activate a version
 
 ```http
@@ -284,6 +337,30 @@ A newly accepted activation returns a durable provisioning operation with `202 A
 
 Deactivation is idempotent. It closes local intake immediately, cleans managed connector resources asynchronously when required, and does not cancel already accepted executions. Exact API responses, operation states, connector modes, version cutover, and recovery follow [`workflow-provisioning-v1.md`](workflow-provisioning-v1.md).
 
+For the current `NONE`/`VALIDATE_ONLY` connector set, no managed provider
+resource requires cleanup, so deactivation returns `200` with the closed intake
+projection:
+
+```json
+{
+  "data": {
+    "workflowId": "workflow-id",
+    "activeVersionId": null,
+    "acceptingNewDocuments": false,
+    "targetVersionId": null,
+    "operation": null,
+    "cleanupRequired": false,
+    "health": "UNKNOWN"
+  }
+}
+```
+
+Repeating the same `Idempotency-Key` returns the stored projection. A
+deactivation while activation/replacement is non-terminal returns
+`409 WORKFLOW_PROVISIONING_IN_PROGRESS`. Once managed connectors are installed,
+the same endpoint may return `202` with a durable cleanup operation as defined
+by the provisioning contract.
+
 ## Catalog and connection endpoints
 
 | Method and path                                                 | Purpose                                                                     |
@@ -301,6 +378,31 @@ Deactivation is idempotent. It closes local intake immediately, cleans managed c
 | `GET /api/v1/connections/:connectionId/resources`               | Browse provider resources through connector capabilities                    |
 
 Connection responses never expose refresh tokens, client secrets, encrypted provider blobs, presigned URLs, or raw secret-manager references.
+
+Connection create, rename, and revoke mutations require `Idempotency-Key`.
+Creation currently accepts safe shell metadata only (`connectorId`,
+`displayName`, and an empty server-versioned configuration object). `PATCH`
+renames with an `expectedStateVersion` optimistic-concurrency guard. `DELETE`
+soft-revokes an unreferenced connection; immutable workflow-version references
+return `409 CONNECTION_REFERENCE_CONFLICT`, and normal lists omit revoked
+records. OAuth consent, secret installation, live health validation, and
+provider resource browsing are separate provider-adapter operations and are not
+simulated by this metadata lifecycle.
+
+`GET /api/v1/connectors` accepts an optional `capability=ENTRY|DESTINATION`
+filter. The list and detail projections contain the same immutable installed
+descriptor fields, including connector/action versions and safe configuration
+schemas. Each action declares whether `connectionId` is required; workflow
+validation rejects both missing required connections and connections supplied
+to actions that do not use them. Unknown connector/profile identifiers return
+`404`; an unsupported capability filter returns
+`400 CONNECTOR_CAPABILITY_INVALID`.
+
+The initial built-in extraction-profile projection contains a safe
+`displayName`, stable profile/version identifiers, profile kind, output-field
+paths, and output-schema hash. Tenant-authored custom profiles join the same
+authorized list in Phase 5; provider endpoints, model identifiers, credentials,
+and secret configuration never appear in either projection.
 
 ### Custom extraction-template endpoints
 
