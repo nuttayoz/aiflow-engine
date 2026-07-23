@@ -193,8 +193,12 @@ describe('SharePoint runtime configuration', () => {
         SHAREPOINT_ROOT_KEY_BASE64: rootKeyBase64,
       }),
     ).toEqual({
+      allowedConsentRedirectOrigins: ['http://localhost:3001'],
+      allowedDownloadHostSuffixes: ['.sharepoint.com', '.1drv.com'],
       callbackUrl,
       currentKeyVersion: 3,
+      graphMode: 'FAKE',
+      graphRequestTimeoutMs: 30_000,
       rootKey: new Uint8Array(
         Buffer.from('aiflow-local-sharepoint-root-key-1'),
       ),
@@ -206,6 +210,9 @@ describe('SharePoint runtime configuration', () => {
       loadSharePointRuntimeConfig({
         NODE_ENV: 'production',
         SHAREPOINT_CALLBACK_URL: callbackUrl,
+        SHAREPOINT_CONSENT_REDIRECT_ORIGINS: 'https://portal.example.com',
+        SHAREPOINT_GRAPH_CLIENT_ID: '11111111-1111-4111-8111-111111111111',
+        SHAREPOINT_GRAPH_CLIENT_SECRET: 'production-test-secret',
         SHAREPOINT_ROOT_KEY_BASE64: rootKeyBase64,
       }),
     ).toThrow(

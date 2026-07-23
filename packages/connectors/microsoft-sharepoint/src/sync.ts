@@ -100,6 +100,7 @@ export class SharePointSyncProcessor {
             this.clock().getTime() + SUBSCRIPTION_LIFETIME_MINUTES * 60 * 1_000,
           ),
           subscriptionId: claim.subscriptionId,
+          tenantId: claim.tenantId,
         });
         await this.repository.saveRenewedSubscription({
           leaseOwner: input.leaseOwner,
@@ -112,6 +113,7 @@ export class SharePointSyncProcessor {
         connectionId: claim.connectionId,
         cursor: claim.cursor,
         driveId: claim.driveId,
+        tenantId: claim.tenantId,
       });
       await this.repository.applyDeltaPage({
         claim,

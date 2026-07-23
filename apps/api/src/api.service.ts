@@ -9,23 +9,39 @@ import {
 
 import { microsoftBusinessCentralConnector } from '@aiflow/connector-microsoft-business-central';
 import { directUploadConnector } from '@aiflow/connector-direct-upload';
-import { microsoftSharePointConnector } from '@aiflow/connector-microsoft-sharepoint';
+import {
+  AesGcmSharePointCursorProtector,
+  createDemoSharePointGraphAdapter,
+  HttpSharePointGraphAdapter,
+  isSharePointConnectionConfiguration,
+  MicrosoftEntraClientCredentialsTokenProvider,
+  microsoftSharePointConnector,
+  SharePointResourceBrowser,
+  SharePointGraphError,
+  type SharePointCursorProtector,
+  type SharePointGraphPort,
+} from '@aiflow/connector-microsoft-sharepoint';
 import {
   ConnectorRegistry,
   type ConnectorDescriptor,
 } from '@aiflow/connector-sdk';
-import type { S3RuntimeConfig } from '@aiflow/config';
+import type { S3RuntimeConfig, SharePointRuntimeConfig } from '@aiflow/config';
 import {
   DatabaseService,
   PostgresConnectionRepository,
   PostgresDocumentRepository,
   PostgresExecutionRepository,
   PostgresPipelineRepository,
+  PostgresSharePointConnectionAuthority,
   PostgresUploadSessionRepository,
   PostgresWorkflowProvisioningRepository,
   PostgresWorkflowRepository,
 } from '@aiflow/database';
-import type { ConnectionRecord } from '@aiflow/connections';
+import type {
+  ConnectionRecord,
+  ConnectionResourceBrowser,
+  ConnectionResourceType,
+} from '@aiflow/connections';
 import type { ExecutionRecord } from '@aiflow/executions';
 import {
   InMemoryExtractionProfileCatalog,
@@ -51,6 +67,10 @@ import type { ApiAuthorization } from './api-auth';
 import { authorizeProject } from './api-auth';
 
 export const API_S3_CONFIG = Symbol('API_S3_CONFIG');
+export const API_SHAREPOINT_CONFIG = Symbol('API_SHAREPOINT_CONFIG');
+export const API_SYNTHETIC_PROVIDERS_ENABLED = Symbol(
+  'API_SYNTHETIC_PROVIDERS_ENABLED',
+);
 
 const profiles = new InMemoryExtractionProfileCatalog([PHASE2_INVOICE_PROFILE]);
 
@@ -208,6 +228,12 @@ export class ApiService
     microsoftBusinessCentralConnector,
     microsoftSharePointConnector,
   ]);
+  private readonly resourceBrowsers = new Map<
+    string,
+    ConnectionResourceBrowser
+  >();
+  private sharePointStateProtector?: SharePointCursorProtector;
+  private sharePointTokens?: MicrosoftEntraClientCredentialsTokenProvider;
   private readonly validator = new WorkflowDefinitionValidator(
     this.connectors,
     profiles,
@@ -216,6 +242,10 @@ export class ApiService
   constructor(
     @Inject(DatabaseService) private readonly database: DatabaseService,
     @Inject(API_S3_CONFIG) private readonly s3Config: S3RuntimeConfig,
+    @Inject(API_SHAREPOINT_CONFIG)
+    private readonly sharePointConfig: SharePointRuntimeConfig,
+    @Inject(API_SYNTHETIC_PROVIDERS_ENABLED)
+    private readonly syntheticProvidersEnabled: boolean,
   ) {}
 
   onApplicationBootstrap(): void {
@@ -232,10 +262,54 @@ export class ApiService
     this.sessions = new PostgresUploadSessionRepository(dataSource, schema);
     this.storage = new S3ObjectStorage(this.s3Config);
     this.uploads = new DirectUploadService(this.sessions, this.storage);
+    const key = {
+      keyVersion: this.sharePointConfig.currentKeyVersion,
+      rootKey: this.sharePointConfig.rootKey,
+    };
+    this.sharePointStateProtector = new AesGcmSharePointCursorProtector(
+      [key],
+      this.sharePointConfig.currentKeyVersion,
+    );
+    this.resourceBrowsers.set(
+      'microsoft-sharepoint',
+      new SharePointResourceBrowser(
+        this.createSharePointGraph(),
+        this.sharePointStateProtector,
+      ),
+    );
   }
 
   onApplicationShutdown(): void {
     this.storage?.close();
+  }
+
+  private createSharePointGraph(): SharePointGraphPort {
+    if (this.sharePointConfig.graphMode === 'FAKE') {
+      if (!this.syntheticProvidersEnabled) {
+        throw new Error('SHAREPOINT_FAKE_GRAPH_DISABLED');
+      }
+      return createDemoSharePointGraphAdapter().graph;
+    }
+    const clientId = this.sharePointConfig.graphClientId;
+    const clientSecret = this.sharePointConfig.graphClientSecret;
+    if (clientId === undefined || clientSecret === undefined) {
+      throw new Error('SHAREPOINT_GRAPH_ADAPTER_NOT_CONFIGURED');
+    }
+    const tokens = new MicrosoftEntraClientCredentialsTokenProvider(
+      clientId,
+      clientSecret,
+      this.sharePointConfig.graphRequestTimeoutMs,
+    );
+    this.sharePointTokens = tokens;
+    return new HttpSharePointGraphAdapter(
+      new PostgresSharePointConnectionAuthority(
+        this.database.dataSource,
+        this.database.schema,
+      ),
+      tokens,
+      this.sharePointConfig.graphRequestTimeoutMs,
+      this.sharePointConfig.allowedDownloadHostSuffixes,
+    );
   }
 
   connectorCatalog(capability?: string): readonly ConnectorDescriptor[] {
@@ -295,7 +369,12 @@ export class ApiService
             input.configuration,
             'CONNECTION_CONFIGURATION_INVALID',
           );
-    if (Object.keys(configuration).length > 0) {
+    const connectionValidation =
+      this.connectors.validateConnectionConfiguration(
+        input.connectorId,
+        configuration,
+      );
+    if (!connectionValidation.valid) {
       throw new Error('CONNECTION_CONFIGURATION_INVALID');
     }
     const idempotencyKey = requireIdempotencyKey(rawIdempotencyKey);
@@ -303,7 +382,8 @@ export class ApiService
       actor: authorization.actor,
       causationId: idempotencyKey,
       configuration,
-      configurationSchemaVersion: 1,
+      configurationSchemaVersion:
+        connector.descriptor.connectionConfigurationSchemaVersion ?? 1,
       connectorId: input.connectorId,
       correlationId: authorization.correlationId,
       displayName: input.displayName,
@@ -335,6 +415,285 @@ export class ApiService
     );
     if (connection === undefined) throw new Error('CONNECTION_NOT_FOUND');
     return connectionView(connection);
+  }
+
+  async listConnectionResources(
+    authorization: ApiAuthorization,
+    connectionId: string,
+    query: Readonly<Record<string, unknown>>,
+  ) {
+    const connection = await this.requireConnections().findById(
+      authorization.tenantId,
+      connectionId,
+    );
+    if (connection === undefined || connection.status !== 'ACTIVE') {
+      throw new Error('CONNECTION_NOT_FOUND');
+    }
+    const resourceType = query.resourceType;
+    if (
+      typeof resourceType !== 'string' ||
+      !['DRIVE', 'FOLDER', 'SITE'].includes(resourceType) ||
+      Object.keys(query).some(
+        (key) =>
+          ![
+            'containerResourceId',
+            'cursor',
+            'parentResourceId',
+            'resourceType',
+            'search',
+          ].includes(key),
+      )
+    ) {
+      throw new Error('CONNECTION_RESOURCE_QUERY_INVALID');
+    }
+    const readOptional = (name: string, maximumLength: number) => {
+      const value = query[name];
+      if (value === undefined) return undefined;
+      if (
+        typeof value !== 'string' ||
+        value.length === 0 ||
+        value.length > maximumLength
+      ) {
+        throw new Error('CONNECTION_RESOURCE_QUERY_INVALID');
+      }
+      return value;
+    };
+    const browser = this.resourceBrowsers.get(connection.connectorId);
+    if (browser === undefined) {
+      throw new Error('CONNECTION_RESOURCE_BROWSER_NOT_CONFIGURED');
+    }
+    return browser.list({
+      connectionId,
+      ...(readOptional('containerResourceId', 512) === undefined
+        ? {}
+        : {
+            containerResourceId: readOptional('containerResourceId', 512),
+          }),
+      ...(readOptional('cursor', 4_096) === undefined
+        ? {}
+        : { cursor: readOptional('cursor', 4_096) }),
+      ...(readOptional('parentResourceId', 512) === undefined
+        ? {}
+        : { parentResourceId: readOptional('parentResourceId', 512) }),
+      resourceType: resourceType as ConnectionResourceType,
+      ...(readOptional('search', 100) === undefined
+        ? {}
+        : { search: readOptional('search', 100) }),
+      tenantId: authorization.tenantId,
+    });
+  }
+
+  async getConnectionAuthorization(
+    authorization: ApiAuthorization,
+    connectionId: string,
+  ) {
+    const connection = await this.requireSharePointConnection(
+      authorization,
+      connectionId,
+    );
+    if (this.sharePointConfig.graphMode === 'FAKE') {
+      await this.requireConnections().setHealth({
+        actor: authorization.actor,
+        causationId: authorization.correlationId,
+        connectionId,
+        correlationId: authorization.correlationId,
+        health: 'HEALTHY',
+        tenantId: authorization.tenantId,
+      });
+      return { status: 'AUTHORIZED' as const };
+    }
+    const tokens = this.requireSharePointTokens();
+    try {
+      await tokens.getAccessToken({
+        externalTenantId: connection.configuration.externalTenantId,
+      });
+      await this.requireConnections().setHealth({
+        actor: authorization.actor,
+        causationId: authorization.correlationId,
+        connectionId,
+        correlationId: authorization.correlationId,
+        health: 'HEALTHY',
+        tenantId: authorization.tenantId,
+      });
+      return { status: 'AUTHORIZED' as const };
+    } catch (error) {
+      if (
+        error instanceof SharePointGraphError &&
+        error.code === 'GRAPH_PERMISSION_DENIED'
+      ) {
+        await this.requireConnections().setHealth({
+          actor: authorization.actor,
+          causationId: authorization.correlationId,
+          connectionId,
+          correlationId: authorization.correlationId,
+          health: 'DEGRADED',
+          tenantId: authorization.tenantId,
+        });
+        return { status: 'CONSENT_REQUIRED' as const };
+      }
+      throw error;
+    }
+  }
+
+  async createConnectionAuthorizationSession(
+    authorization: ApiAuthorization,
+    connectionId: string,
+    body: unknown,
+  ) {
+    const connection = await this.requireSharePointConnection(
+      authorization,
+      connectionId,
+    );
+    if (this.sharePointConfig.graphMode === 'FAKE') {
+      return { status: 'AUTHORIZED' as const, url: null };
+    }
+    const input = requireRecord(body, 'CONNECTION_AUTHORIZATION_INPUT_INVALID');
+    if (
+      Object.keys(input).some((key) => key !== 'redirectUri') ||
+      typeof input.redirectUri !== 'string'
+    ) {
+      throw new Error('CONNECTION_AUTHORIZATION_INPUT_INVALID');
+    }
+    let redirect: URL;
+    try {
+      redirect = new URL(input.redirectUri);
+    } catch {
+      throw new Error('CONNECTION_AUTHORIZATION_REDIRECT_INVALID');
+    }
+    if (
+      !this.sharePointConfig.allowedConsentRedirectOrigins.includes(
+        redirect.origin,
+      ) ||
+      redirect.pathname !== '/microsoft/adminconsent/callback' ||
+      redirect.username.length > 0 ||
+      redirect.password.length > 0 ||
+      redirect.search.length > 0 ||
+      redirect.hash.length > 0
+    ) {
+      throw new Error('CONNECTION_AUTHORIZATION_REDIRECT_INVALID');
+    }
+    const state = Buffer.from(
+      this.requireSharePointStateProtector().protect(
+        JSON.stringify({
+          connectionId,
+          expiresAt: Date.now() + 10 * 60_000,
+          externalTenantId: connection.configuration.externalTenantId,
+          tenantId: authorization.tenantId,
+        }),
+      ),
+    ).toString('base64url');
+    return {
+      status: 'CONSENT_REQUIRED' as const,
+      url: this.requireSharePointTokens().adminConsentUrl({
+        externalTenantId: connection.configuration.externalTenantId,
+        redirectUri: redirect.toString(),
+        state,
+      }),
+    };
+  }
+
+  async completeConnectionAuthorization(
+    authorization: ApiAuthorization,
+    connectionId: string,
+    body: unknown,
+  ) {
+    const connection = await this.requireSharePointConnection(
+      authorization,
+      connectionId,
+    );
+    if (this.sharePointConfig.graphMode === 'FAKE') {
+      return { status: 'AUTHORIZED' as const };
+    }
+    const input = requireRecord(
+      body,
+      'CONNECTION_AUTHORIZATION_COMPLETION_INVALID',
+    );
+    if (
+      Object.keys(input).some(
+        (key) => !['adminConsent', 'state', 'tenantId'].includes(key),
+      ) ||
+      input.adminConsent !== true ||
+      typeof input.state !== 'string' ||
+      input.state.length === 0 ||
+      input.state.length > 4_096 ||
+      typeof input.tenantId !== 'string'
+    ) {
+      throw new Error('CONNECTION_AUTHORIZATION_COMPLETION_INVALID');
+    }
+    let state: unknown;
+    try {
+      state = JSON.parse(
+        this.requireSharePointStateProtector().unprotect(
+          Buffer.from(input.state, 'base64url'),
+        ),
+      );
+    } catch {
+      throw new Error('CONNECTION_AUTHORIZATION_STATE_INVALID');
+    }
+    if (
+      state === null ||
+      typeof state !== 'object' ||
+      !('connectionId' in state) ||
+      state.connectionId !== connectionId ||
+      !('tenantId' in state) ||
+      state.tenantId !== authorization.tenantId ||
+      !('externalTenantId' in state) ||
+      state.externalTenantId !== connection.configuration.externalTenantId ||
+      state.externalTenantId !== input.tenantId ||
+      !('expiresAt' in state) ||
+      typeof state.expiresAt !== 'number' ||
+      state.expiresAt <= Date.now()
+    ) {
+      throw new Error('CONNECTION_AUTHORIZATION_STATE_INVALID');
+    }
+    await this.requireSharePointTokens().getAccessToken({
+      externalTenantId: connection.configuration.externalTenantId,
+    });
+    await this.requireConnections().setHealth({
+      actor: authorization.actor,
+      causationId: authorization.correlationId,
+      connectionId,
+      correlationId: authorization.correlationId,
+      health: 'HEALTHY',
+      tenantId: authorization.tenantId,
+    });
+    return { status: 'AUTHORIZED' as const };
+  }
+
+  async completeConnectionAuthorizationFromState(
+    authorization: ApiAuthorization,
+    body: unknown,
+  ) {
+    const input = requireRecord(
+      body,
+      'CONNECTION_AUTHORIZATION_COMPLETION_INVALID',
+    );
+    if (typeof input.state !== 'string' || input.state.length > 4_096) {
+      throw new Error('CONNECTION_AUTHORIZATION_COMPLETION_INVALID');
+    }
+    let state: unknown;
+    try {
+      state = JSON.parse(
+        this.requireSharePointStateProtector().unprotect(
+          Buffer.from(input.state, 'base64url'),
+        ),
+      );
+    } catch {
+      throw new Error('CONNECTION_AUTHORIZATION_STATE_INVALID');
+    }
+    if (
+      state === null ||
+      typeof state !== 'object' ||
+      !('connectionId' in state) ||
+      typeof state.connectionId !== 'string'
+    ) {
+      throw new Error('CONNECTION_AUTHORIZATION_STATE_INVALID');
+    }
+    return this.completeConnectionAuthorization(
+      authorization,
+      state.connectionId,
+      body,
+    );
   }
 
   async updateConnection(
@@ -917,6 +1276,44 @@ export class ApiService
   private requireConnections() {
     if (!this.connections) throw new Error('API_NOT_READY');
     return this.connections;
+  }
+  private async requireSharePointConnection(
+    authorization: ApiAuthorization,
+    connectionId: string,
+  ): Promise<
+    ConnectionRecord & {
+      readonly configuration: {
+        readonly externalTenantId: string;
+        readonly identityMode: 'SAAS_MULTITENANT';
+        readonly permissionProfile: 'FILES_AND_SITES_READ_ALL_V1';
+      };
+    }
+  > {
+    const connection = await this.requireConnections().findById(
+      authorization.tenantId,
+      connectionId,
+    );
+    if (
+      connection === undefined ||
+      connection.connectorId !== 'microsoft-sharepoint' ||
+      connection.status !== 'ACTIVE' ||
+      !isSharePointConnectionConfiguration(connection.configuration)
+    ) {
+      throw new Error('CONNECTION_NOT_FOUND');
+    }
+    return { ...connection, configuration: connection.configuration };
+  }
+  private requireSharePointStateProtector(): SharePointCursorProtector {
+    if (this.sharePointStateProtector === undefined) {
+      throw new Error('API_NOT_READY');
+    }
+    return this.sharePointStateProtector;
+  }
+  private requireSharePointTokens(): MicrosoftEntraClientCredentialsTokenProvider {
+    if (this.sharePointTokens === undefined) {
+      throw new Error('SHAREPOINT_GRAPH_ADAPTER_NOT_CONFIGURED');
+    }
+    return this.sharePointTokens;
   }
   private requirePipeline() {
     if (!this.pipeline) throw new Error('API_NOT_READY');

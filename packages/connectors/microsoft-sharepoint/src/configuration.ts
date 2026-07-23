@@ -7,6 +7,33 @@ export interface SharePointEntryConfiguration extends Readonly<
   readonly siteId: string;
 }
 
+export interface SharePointConnectionConfiguration extends Readonly<
+  Record<string, unknown>
+> {
+  readonly externalTenantId: string;
+  readonly identityMode: 'SAAS_MULTITENANT';
+  readonly permissionProfile: 'FILES_AND_SITES_READ_ALL_V1';
+}
+
+const entraTenantIdPattern =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
+
+export const isSharePointConnectionConfiguration = (
+  value: unknown,
+): value is SharePointConnectionConfiguration => {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    return false;
+  }
+  const configuration = value as Record<string, unknown>;
+  return (
+    Object.keys(configuration).length === 3 &&
+    typeof configuration.externalTenantId === 'string' &&
+    entraTenantIdPattern.test(configuration.externalTenantId) &&
+    configuration.identityMode === 'SAAS_MULTITENANT' &&
+    configuration.permissionProfile === 'FILES_AND_SITES_READ_ALL_V1'
+  );
+};
+
 const configurationKeys = [
   'driveId',
   'folderId',

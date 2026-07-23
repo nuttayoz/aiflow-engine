@@ -54,6 +54,28 @@ describe('Microsoft SharePoint connector', () => {
     ).toBe(false);
   });
 
+  it('accepts only the explicit SaaS app-only connection boundary', () => {
+    const registry = new ConnectorRegistry([microsoftSharePointConnector]);
+    const configuration = {
+      externalTenantId: '22222222-2222-4222-8222-222222222222',
+      identityMode: 'SAAS_MULTITENANT',
+      permissionProfile: 'FILES_AND_SITES_READ_ALL_V1',
+    };
+
+    expect(
+      registry.validateConnectionConfiguration(
+        'microsoft-sharepoint',
+        configuration,
+      ),
+    ).toEqual({ valid: true });
+    expect(
+      registry.validateConnectionConfiguration('microsoft-sharepoint', {
+        ...configuration,
+        clientSecret: 'must-not-be-stored-in-a-connection',
+      }),
+    ).toMatchObject({ valid: false });
+  });
+
   it('requires an owned connection during activation validation', async () => {
     await expect(
       microsoftSharePointConnector.validateActivation({

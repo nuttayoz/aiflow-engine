@@ -3,6 +3,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import type { DataSource, EntityManager } from 'typeorm';
 
 import type {
+  ConnectionActor,
   ConnectionRecord,
   ConnectionRepository,
   CreateConnectionInput,
@@ -373,6 +374,49 @@ export class PostgresConnectionRepository implements ConnectionRepository {
     return this.requireConnection(input.tenantId, input.connectionId);
   }
 
+  async setHealth(input: {
+    readonly actor: ConnectionActor;
+    readonly causationId: string;
+    readonly connectionId: string;
+    readonly correlationId: string;
+    readonly health: ConnectionRecord['health'];
+    readonly tenantId: string;
+  }): Promise<ConnectionRecord> {
+    await this.dataSource.transaction(async (manager) => {
+      const connection = await this.lockConnection(
+        manager,
+        input.tenantId,
+        input.connectionId,
+      );
+      if (connection.status !== 'ACTIVE') {
+        throw new Error('CONNECTION_NOT_ACTIVE');
+      }
+      await manager.query(
+        `
+          UPDATE ${this.connections}
+          SET health = $3,
+              state_version = CASE
+                WHEN health = $3 THEN state_version
+                ELSE state_version + 1
+              END,
+              updated_at = CASE
+                WHEN health = $3 THEN updated_at
+                ELSE clock_timestamp()
+              END
+          WHERE tenant_id = $1 AND id = $2
+        `,
+        [input.tenantId, input.connectionId, input.health],
+      );
+      await this.appendAudit(
+        manager,
+        input,
+        'connection.health.update',
+        input.connectionId,
+      );
+    });
+    return this.requireConnection(input.tenantId, input.connectionId);
+  }
+
   private async lockConnection(
     manager: EntityManager,
     tenantId: string,
@@ -496,7 +540,15 @@ export class PostgresConnectionRepository implements ConnectionRepository {
   private async appendAudit(
     manager: EntityManager,
     input:
-      CreateConnectionInput | RevokeConnectionInput | UpdateConnectionInput,
+      | CreateConnectionInput
+      | RevokeConnectionInput
+      | UpdateConnectionInput
+      | {
+          readonly actor: ConnectionActor;
+          readonly causationId: string;
+          readonly correlationId: string;
+          readonly tenantId: string;
+        },
     action: string,
     connectionId: string,
   ): Promise<void> {

@@ -16,12 +16,14 @@ import {
 import { directUploadConnector } from '@aiflow/connector-direct-upload';
 import {
   AesGcmSharePointCursorProtector,
-  FAKE_SHAREPOINT_ANY_CONNECTION_ID,
-  FakeSharePointGraphAdapter,
+  createDemoSharePointGraphAdapter,
+  HttpSharePointGraphAdapter,
+  MicrosoftEntraClientCredentialsTokenProvider,
   microsoftSharePointConnector,
   SharePointIngestionProcessor,
   SharePointManagedEntryProvisioner,
   SharePointSyncProcessor,
+  type SharePointGraphPort,
 } from '@aiflow/connector-microsoft-sharepoint';
 import { phase1SyntheticConnector } from '@aiflow/connector-phase1-synthetic';
 import { ConnectorRegistry } from '@aiflow/connector-sdk';
@@ -30,6 +32,7 @@ import {
   PostgresExecutionRepository,
   PostgresPipelineRepository,
   PostgresSharePointIngestionRepository,
+  PostgresSharePointConnectionAuthority,
   PostgresSharePointProvisioningRepository,
   PostgresSharePointSyncRepository,
   PostgresWorkflowProvisioningRepository,
@@ -145,9 +148,10 @@ export class FoundationWorkerService
     ]);
     const extractionProvider = new FakeExtractionProvider();
     const businessCentral = new FakeBusinessCentralDestination();
-    const sharePointRuntime = this.syntheticStagesEnabled
-      ? this.createFakeSharePointRuntime(schema, this.storage)
-      : undefined;
+    const sharePointRuntime = this.createSharePointRuntime(
+      schema,
+      this.storage,
+    );
     this.extraction = new ExtractionProcessor(
       this.pipeline,
       this.executions,
@@ -186,10 +190,10 @@ export class FoundationWorkerService
         microsoftSharePointConnector,
         phase1SyntheticConnector,
       ]),
-      sharePointRuntime === undefined ? [] : [sharePointRuntime.provisioner],
+      [sharePointRuntime.provisioner],
     );
-    this.sharePointIngestion = sharePointRuntime?.ingestion;
-    this.sharePointSync = sharePointRuntime?.sync;
+    this.sharePointIngestion = sharePointRuntime.ingestion;
+    this.sharePointSync = sharePointRuntime.sync;
 
     await Promise.all(
       this.queueNames.map((queueName) => this.rabbitMq.start(queueName, this)),
@@ -382,7 +386,7 @@ export class FoundationWorkerService
     return this.mapping;
   }
 
-  private createFakeSharePointRuntime(
+  private createSharePointRuntime(
     schema: string,
     storage: S3ObjectStorage,
   ): {
@@ -394,65 +398,7 @@ export class FoundationWorkerService
       keyVersion: this.sharePointConfig.currentKeyVersion,
       rootKey: this.sharePointConfig.rootKey,
     };
-    const target = {
-      connectionId: FAKE_SHAREPOINT_ANY_CONNECTION_ID,
-      driveId: 'demo-sharepoint-drive',
-      externalTenantId: 'demo-microsoft-tenant',
-      folderId: 'demo-sharepoint-inbound',
-      rootItemId: 'demo-sharepoint-root',
-      siteId: 'demo-sharepoint-site',
-    };
-    const graph = new FakeSharePointGraphAdapter([target]);
-    graph.setDeltaPage(target.connectionId, target.driveId, undefined, {
-      finalCursor: 'fake-baseline-delta-cursor',
-      items: [
-        {
-          eTag: 'fake-folder-etag',
-          id: target.folderId,
-          kind: 'FOLDER',
-          name: 'Inbound',
-          parentId: target.rootItemId,
-        },
-      ],
-    });
-    const demoDocument = Buffer.from(
-      '%PDF-1.4\nAiFlow local SharePoint entry proof\n%%EOF\n',
-    );
-    graph.setDeltaPage(
-      target.connectionId,
-      target.driveId,
-      'fake-baseline-delta-cursor',
-      {
-        finalCursor: 'fake-live-delta-cursor',
-        items: [
-          {
-            cTag: 'fake-demo-document-ctag',
-            contentType: 'application/pdf',
-            eTag: 'fake-demo-document-etag',
-            id: 'fake-demo-document',
-            kind: 'FILE',
-            name: 'sharepoint-demo.pdf',
-            parentId: target.folderId,
-            sizeBytes: demoDocument.byteLength,
-          },
-        ],
-      },
-    );
-    graph.setDeltaPage(
-      target.connectionId,
-      target.driveId,
-      'fake-live-delta-cursor',
-      {
-        finalCursor: 'fake-live-delta-cursor',
-        items: [],
-      },
-    );
-    graph.setFileContent(
-      target.connectionId,
-      target.driveId,
-      'fake-demo-document',
-      demoDocument,
-    );
+    const graph = this.createSharePointGraph(schema);
     const cursorProtector = new AesGcmSharePointCursorProtector(
       [key],
       this.sharePointConfig.currentKeyVersion,
@@ -487,5 +433,32 @@ export class FoundationWorkerService
         graph,
       ),
     };
+  }
+
+  private createSharePointGraph(schema: string): SharePointGraphPort {
+    if (this.sharePointConfig.graphMode === 'FAKE') {
+      if (!this.syntheticStagesEnabled) {
+        throw new Error('SHAREPOINT_FAKE_GRAPH_DISABLED');
+      }
+      return createDemoSharePointGraphAdapter().graph;
+    }
+    const clientId = this.sharePointConfig.graphClientId;
+    const clientSecret = this.sharePointConfig.graphClientSecret;
+    if (clientId === undefined || clientSecret === undefined) {
+      throw new Error('SHAREPOINT_GRAPH_ADAPTER_NOT_CONFIGURED');
+    }
+    return new HttpSharePointGraphAdapter(
+      new PostgresSharePointConnectionAuthority(
+        this.database.dataSource,
+        schema,
+      ),
+      new MicrosoftEntraClientCredentialsTokenProvider(
+        clientId,
+        clientSecret,
+        this.sharePointConfig.graphRequestTimeoutMs,
+      ),
+      this.sharePointConfig.graphRequestTimeoutMs,
+      this.sharePointConfig.allowedDownloadHostSuffixes,
+    );
   }
 }

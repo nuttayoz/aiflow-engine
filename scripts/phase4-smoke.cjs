@@ -76,10 +76,10 @@ const stopRoles = async () => {
   );
 };
 
-const createConnection = (connectorId, displayName) =>
+const createConnection = (connectorId, displayName, configuration = {}) =>
   request('/api/v1/connections', {
     body: JSON.stringify({
-      configuration: {},
+      configuration,
       connectorId,
       displayName,
     }),
@@ -106,12 +106,38 @@ const main = async () => {
   }
 
   const [entryConnection, destinationConnection] = await Promise.all([
-    createConnection('microsoft-sharepoint', `Phase 4 SharePoint ${runId}`),
+    createConnection('microsoft-sharepoint', `Phase 4 SharePoint ${runId}`, {
+      externalTenantId: '00000000-0000-4000-8000-000000000001',
+      identityMode: 'SAAS_MULTITENANT',
+      permissionProfile: 'FILES_AND_SITES_READ_ALL_V1',
+    }),
     createConnection(
       'microsoft-business-central',
       `Phase 4 Business Central ${runId}`,
     ),
   ]);
+  const authorization = await request(
+    `/api/v1/connections/${entryConnection.id}/authorization`,
+  );
+  if (authorization.status !== 'AUTHORIZED') {
+    throw new Error('SHAREPOINT_CONNECTION_NOT_AUTHORIZED');
+  }
+  const sites = await request(
+    `/api/v1/connections/${entryConnection.id}/resources?resourceType=SITE`,
+  );
+  const drives = await request(
+    `/api/v1/connections/${entryConnection.id}/resources?resourceType=DRIVE&parentResourceId=${encodeURIComponent('demo-sharepoint-site')}`,
+  );
+  const folders = await request(
+    `/api/v1/connections/${entryConnection.id}/resources?resourceType=FOLDER&containerResourceId=${encodeURIComponent('demo-sharepoint-drive')}&parentResourceId=${encodeURIComponent('demo-sharepoint-root')}`,
+  );
+  if (
+    sites[0]?.id !== 'demo-sharepoint-site' ||
+    drives[0]?.id !== 'demo-sharepoint-drive' ||
+    folders[0]?.id !== 'demo-sharepoint-inbound'
+  ) {
+    throw new Error('SHAREPOINT_RESOURCE_DISCOVERY_FAILED');
+  }
 
   const workflow = await request(`/api/v1/projects/${projectId}/workflows`, {
     body: JSON.stringify({

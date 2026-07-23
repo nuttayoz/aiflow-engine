@@ -93,6 +93,7 @@ export class SharePointIngestionProcessor {
         connectionId: claim.connectionId,
         driveId: claim.driveId,
         itemId: claim.itemId,
+        tenantId: claim.tenantId,
       });
       if (
         before?.kind !== 'FILE' ||
@@ -120,6 +121,7 @@ export class SharePointIngestionProcessor {
         connectionId: claim.connectionId,
         driveId: claim.driveId,
         itemId: claim.itemId,
+        tenantId: claim.tenantId,
       });
       if (
         content.contentLength !== before.sizeBytes ||
@@ -138,6 +140,7 @@ export class SharePointIngestionProcessor {
         connectionId: claim.connectionId,
         driveId: claim.driveId,
         itemId: claim.itemId,
+        tenantId: claim.tenantId,
       });
       if (
         after?.kind !== 'FILE' ||

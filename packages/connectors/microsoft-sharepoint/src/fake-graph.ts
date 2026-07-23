@@ -13,6 +13,12 @@ export type FakeSharePointGraphBehavior =
 
 export const FAKE_SHAREPOINT_ANY_CONNECTION_ID =
   'fake-sharepoint-any-connection';
+export const DEMO_SHAREPOINT_EXTERNAL_TENANT_ID =
+  '00000000-0000-4000-8000-000000000001';
+export const DEMO_SHAREPOINT_SITE_ID = 'demo-sharepoint-site';
+export const DEMO_SHAREPOINT_DRIVE_ID = 'demo-sharepoint-drive';
+export const DEMO_SHAREPOINT_ROOT_ID = 'demo-sharepoint-root';
+export const DEMO_SHAREPOINT_FOLDER_ID = 'demo-sharepoint-inbound';
 
 interface StoredSubscription extends SharePointGraphSubscription {
   readonly connectionId: string;
@@ -167,6 +173,97 @@ export class FakeSharePointGraphAdapter implements SharePointGraphPort {
       .map((subscription) => this.publicSubscription(subscription));
   }
 
+  async listResources(input: {
+    readonly connectionId: string;
+    readonly containerResourceId?: string;
+    readonly parentResourceId?: string;
+    readonly resourceType: 'DRIVE' | 'FOLDER' | 'SITE';
+    readonly search?: string;
+  }) {
+    this.failBeforeRead();
+    const matchesConnection = (connectionId: string): boolean =>
+      connectionId === input.connectionId ||
+      connectionId === FAKE_SHAREPOINT_ANY_CONNECTION_ID;
+    const normalizedSearch = input.search?.trim().toLocaleLowerCase();
+    const matchesSearch = (label: string): boolean =>
+      normalizedSearch === undefined ||
+      normalizedSearch.length === 0 ||
+      label.toLocaleLowerCase().includes(normalizedSearch);
+    if (input.resourceType === 'SITE') {
+      const sites = new Map<string, string>();
+      for (const target of this.targets) {
+        if (matchesConnection(target.connectionId)) {
+          sites.set(target.siteId, 'Demo SharePoint site');
+        }
+      }
+      return {
+        items: [...sites].flatMap(([id, label]) =>
+          matchesSearch(label)
+            ? [
+                {
+                  id,
+                  label,
+                  resourceType: 'SITE' as const,
+                  selectable: true,
+                },
+              ]
+            : [],
+        ),
+      };
+    }
+    if (input.resourceType === 'DRIVE') {
+      const drives = new Map<string, { rootItemId: string; siteId: string }>();
+      for (const target of this.targets) {
+        if (
+          matchesConnection(target.connectionId) &&
+          target.siteId === input.parentResourceId
+        ) {
+          drives.set(target.driveId, {
+            rootItemId: target.rootItemId,
+            siteId: target.siteId,
+          });
+        }
+      }
+      return {
+        items: [...drives].flatMap(([id, drive]) => {
+          const label = 'Documents';
+          return matchesSearch(label)
+            ? [
+                {
+                  id,
+                  label,
+                  parentResourceId: drive.siteId,
+                  resourceType: 'DRIVE' as const,
+                  rootResourceId: drive.rootItemId,
+                  selectable: true,
+                },
+              ]
+            : [];
+        }),
+      };
+    }
+    const folders = this.targets.flatMap((target) => {
+      const parentResourceId = input.parentResourceId ?? target.rootItemId;
+      const label = 'Inbound';
+      return matchesConnection(target.connectionId) &&
+        target.driveId === input.containerResourceId &&
+        target.rootItemId === parentResourceId &&
+        matchesSearch(label)
+        ? [
+            {
+              containerResourceId: target.driveId,
+              id: target.folderId,
+              label,
+              parentResourceId,
+              resourceType: 'FOLDER' as const,
+              selectable: true,
+            },
+          ]
+        : [];
+    });
+    return { items: folders };
+  }
+
   async openFileContent(input: {
     readonly connectionId: string;
     readonly driveId: string;
@@ -307,3 +404,69 @@ export class FakeSharePointGraphAdapter implements SharePointGraphPort {
     };
   }
 }
+
+export const createDemoSharePointGraphAdapter = (): {
+  readonly graph: FakeSharePointGraphAdapter;
+  readonly target: SharePointGraphTarget & { readonly connectionId: string };
+} => {
+  const target = {
+    connectionId: FAKE_SHAREPOINT_ANY_CONNECTION_ID,
+    driveId: DEMO_SHAREPOINT_DRIVE_ID,
+    externalTenantId: DEMO_SHAREPOINT_EXTERNAL_TENANT_ID,
+    folderId: DEMO_SHAREPOINT_FOLDER_ID,
+    rootItemId: DEMO_SHAREPOINT_ROOT_ID,
+    siteId: DEMO_SHAREPOINT_SITE_ID,
+  };
+  const graph = new FakeSharePointGraphAdapter([target]);
+  graph.setDeltaPage(target.connectionId, target.driveId, undefined, {
+    finalCursor: 'fake-baseline-delta-cursor',
+    items: [
+      {
+        eTag: 'fake-folder-etag',
+        id: target.folderId,
+        kind: 'FOLDER',
+        name: 'Inbound',
+        parentId: target.rootItemId,
+      },
+    ],
+  });
+  const demoDocument = Buffer.from(
+    '%PDF-1.4\nAiFlow local SharePoint entry proof\n%%EOF\n',
+  );
+  graph.setDeltaPage(
+    target.connectionId,
+    target.driveId,
+    'fake-baseline-delta-cursor',
+    {
+      finalCursor: 'fake-live-delta-cursor',
+      items: [
+        {
+          cTag: 'fake-demo-document-ctag',
+          contentType: 'application/pdf',
+          eTag: 'fake-demo-document-etag',
+          id: 'fake-demo-document',
+          kind: 'FILE',
+          name: 'sharepoint-demo.pdf',
+          parentId: target.folderId,
+          sizeBytes: demoDocument.byteLength,
+        },
+      ],
+    },
+  );
+  graph.setDeltaPage(
+    target.connectionId,
+    target.driveId,
+    'fake-live-delta-cursor',
+    {
+      finalCursor: 'fake-live-delta-cursor',
+      items: [],
+    },
+  );
+  graph.setFileContent(
+    target.connectionId,
+    target.driveId,
+    'fake-demo-document',
+    demoDocument,
+  );
+  return { graph, target };
+};

@@ -8,6 +8,7 @@
     "dist"
   ],
   "dependencies": {
+    "@aiflow/connections": "workspace:*",
     "@aiflow/connector-sdk": "workspace:*",
     "@aiflow/storage": "workspace:*",
     "@aiflow/workflows": "workspace:*"

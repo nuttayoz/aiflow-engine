@@ -5,12 +5,15 @@ import { isSharePointEntryConfiguration } from './configuration';
 
 export * from './client-state';
 export * from './configuration';
+export * from './entra';
 export * from './fake-graph';
 export * from './graph-port';
+export * from './http-graph';
 export * from './ingestion';
 export * from './notification';
 export * from './provisioning';
 export * from './protection';
+export * from './resources';
 export * from './sync';
 
 export const microsoftSharePointDescriptor = {
@@ -36,6 +39,26 @@ export const microsoftSharePointDescriptor = {
       version: 1,
     },
   ],
+  connectionConfigurationSchema: {
+    additionalProperties: false,
+    properties: {
+      externalTenantId: {
+        maxLength: 36,
+        minLength: 36,
+        pattern:
+          '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$',
+        type: 'string',
+      },
+      identityMode: { const: 'SAAS_MULTITENANT', type: 'string' },
+      permissionProfile: {
+        const: 'FILES_AND_SITES_READ_ALL_V1',
+        type: 'string',
+      },
+    },
+    required: ['externalTenantId', 'identityMode', 'permissionProfile'],
+    type: 'object',
+  },
+  connectionConfigurationSchemaVersion: 1,
   connectorId: 'microsoft-sharepoint',
   displayName: 'Microsoft SharePoint',
   version: 1,

@@ -144,6 +144,7 @@ export class SharePointManagedEntryProvisioner implements ManagedEntryProvisione
         driveId: input.configuration.driveId,
         folderId: input.configuration.folderId,
         siteId: input.configuration.siteId,
+        tenantId: input.tenantId,
       });
       let state = await this.ensureState(input, input.configuration, target);
       state = await this.ensureSubscription(state);
@@ -154,6 +155,7 @@ export class SharePointManagedEntryProvisioner implements ManagedEntryProvisione
             ? {}
             : { cursor: state.scanNextCursor }),
           driveId: state.driveId,
+          tenantId: state.tenantId,
         });
         state = await this.repository.saveBaselinePage({
           bindingId: state.bindingId,
@@ -242,6 +244,7 @@ export class SharePointManagedEntryProvisioner implements ManagedEntryProvisione
         connectionId: state.connectionId,
         expiresAt: this.desiredExpiry(),
         subscriptionId: state.subscriptionId,
+        tenantId: state.tenantId,
       });
       return this.repository.saveSubscription({
         bindingId: state.bindingId,
@@ -262,6 +265,7 @@ export class SharePointManagedEntryProvisioner implements ManagedEntryProvisione
       lifecycleNotificationUrl: this.callbackUrl,
       notificationUrl: this.callbackUrl,
       resource: state.resource,
+      tenantId: state.tenantId,
     };
     let subscription: SharePointGraphSubscription;
     try {
@@ -276,6 +280,7 @@ export class SharePointManagedEntryProvisioner implements ManagedEntryProvisione
       const matches = (
         await this.graph.listSubscriptions({
           connectionId: state.connectionId,
+          tenantId: state.tenantId,
         })
       ).filter(
         (candidate) =>

@@ -83,8 +83,14 @@ export interface ObservabilityRuntimeConfig {
 }
 
 export interface SharePointRuntimeConfig {
+  allowedDownloadHostSuffixes: readonly string[];
+  allowedConsentRedirectOrigins: readonly string[];
   callbackUrl: string;
   currentKeyVersion: number;
+  graphClientId?: string;
+  graphClientSecret?: string;
+  graphMode: 'FAKE' | 'MICROSOFT_GRAPH';
+  graphRequestTimeoutMs: number;
   rootKey: Uint8Array;
 }
 
@@ -497,6 +503,79 @@ export const loadSharePointRuntimeConfig = (
     NODE_ENVIRONMENTS,
     'development',
   );
+  const graphMode = readEnum(
+    'SHAREPOINT_GRAPH_MODE',
+    environment.SHAREPOINT_GRAPH_MODE,
+    ['FAKE', 'MICROSOFT_GRAPH'] as const,
+    nodeEnvironment === 'production' ? 'MICROSOFT_GRAPH' : 'FAKE',
+  );
+  if (nodeEnvironment === 'production' && graphMode !== 'MICROSOFT_GRAPH') {
+    throw new ConfigurationError(
+      'SHAREPOINT_GRAPH_MODE must be MICROSOFT_GRAPH in production',
+    );
+  }
+  const graphClientId = environment.SHAREPOINT_GRAPH_CLIENT_ID?.trim();
+  const graphClientSecret = environment.SHAREPOINT_GRAPH_CLIENT_SECRET?.trim();
+  const entraIdPattern =
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
+  if (
+    graphMode === 'MICROSOFT_GRAPH' &&
+    (graphClientId === undefined ||
+      !entraIdPattern.test(graphClientId) ||
+      graphClientSecret === undefined ||
+      graphClientSecret.length < 16 ||
+      graphClientSecret.length > 4_096)
+  ) {
+    throw new ConfigurationError(
+      'Microsoft Graph mode requires a valid SHAREPOINT_GRAPH_CLIENT_ID and SHAREPOINT_GRAPH_CLIENT_SECRET',
+    );
+  }
+  const allowedDownloadHostSuffixes = (
+    environment.SHAREPOINT_DOWNLOAD_HOST_SUFFIXES ?? '.sharepoint.com,.1drv.com'
+  )
+    .split(',')
+    .map((value) => value.trim().toLowerCase())
+    .filter((value) => value.length > 0);
+  if (
+    allowedDownloadHostSuffixes.length === 0 ||
+    allowedDownloadHostSuffixes.length > 20 ||
+    allowedDownloadHostSuffixes.some(
+      (suffix) => !/^\.[a-z0-9.-]+$/u.test(suffix) || suffix.length > 255,
+    )
+  ) {
+    throw new ConfigurationError(
+      'SHAREPOINT_DOWNLOAD_HOST_SUFFIXES must be a bounded comma-separated hostname suffix list',
+    );
+  }
+  const allowedConsentRedirectOrigins = (
+    environment.SHAREPOINT_CONSENT_REDIRECT_ORIGINS ??
+    (nodeEnvironment === 'production' ? '' : 'http://localhost:3001')
+  )
+    .split(',')
+    .map((value) => value.trim())
+    .filter((value) => value.length > 0);
+  if (
+    allowedConsentRedirectOrigins.length === 0 ||
+    allowedConsentRedirectOrigins.length > 20 ||
+    allowedConsentRedirectOrigins.some((origin) => {
+      try {
+        const parsed = new URL(origin);
+        return (
+          parsed.origin !== origin ||
+          parsed.username.length > 0 ||
+          parsed.password.length > 0 ||
+          (nodeEnvironment === 'production' && parsed.protocol !== 'https:') ||
+          !['http:', 'https:'].includes(parsed.protocol)
+        );
+      } catch {
+        return true;
+      }
+    })
+  ) {
+    throw new ConfigurationError(
+      'SHAREPOINT_CONSENT_REDIRECT_ORIGINS must contain approved origins',
+    );
+  }
   const encodedKey = environment.SHAREPOINT_ROOT_KEY_BASE64?.trim();
   if (encodedKey === undefined || !/^[A-Za-z0-9+/]+={0,2}$/u.test(encodedKey)) {
     throw new ConfigurationError(
@@ -536,6 +615,8 @@ export const loadSharePointRuntimeConfig = (
     );
   }
   return {
+    allowedDownloadHostSuffixes,
+    allowedConsentRedirectOrigins,
     callbackUrl,
     currentKeyVersion: readInteger(environment.SHAREPOINT_KEY_VERSION, {
       defaultValue: 1,
@@ -543,6 +624,18 @@ export const loadSharePointRuntimeConfig = (
       minimum: 1,
       name: 'SHAREPOINT_KEY_VERSION',
     }),
+    ...(graphClientId === undefined ? {} : { graphClientId }),
+    ...(graphClientSecret === undefined ? {} : { graphClientSecret }),
+    graphMode,
+    graphRequestTimeoutMs: readInteger(
+      environment.SHAREPOINT_GRAPH_REQUEST_TIMEOUT_MS,
+      {
+        defaultValue: 30_000,
+        maximum: 300_000,
+        minimum: 1_000,
+        name: 'SHAREPOINT_GRAPH_REQUEST_TIMEOUT_MS',
+      },
+    ),
     rootKey: new Uint8Array(rootKey),
   };
 };

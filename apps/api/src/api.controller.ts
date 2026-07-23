@@ -105,6 +105,79 @@ export class ApiController {
     };
   }
 
+  @Get('connections/:connectionId/resources')
+  async listConnectionResources(
+    @Req() request: AuthorizedRequest,
+    @Param('connectionId') connectionId: string,
+    @Query() query: Readonly<Record<string, unknown>>,
+  ) {
+    const page = await this.service.listConnectionResources(
+      requireAuthorization(request),
+      connectionId,
+      query,
+    );
+    return {
+      data: page.items,
+      page: { nextCursor: page.nextCursor ?? null },
+    };
+  }
+
+  @Get('connections/:connectionId/authorization')
+  async getConnectionAuthorization(
+    @Req() request: AuthorizedRequest,
+    @Param('connectionId') connectionId: string,
+  ) {
+    return {
+      data: await this.service.getConnectionAuthorization(
+        requireAuthorization(request),
+        connectionId,
+      ),
+    };
+  }
+
+  @Post('connections/:connectionId/authorization-sessions')
+  async createConnectionAuthorizationSession(
+    @Req() request: AuthorizedRequest,
+    @Param('connectionId') connectionId: string,
+    @Body() body: unknown,
+  ) {
+    return {
+      data: await this.service.createConnectionAuthorizationSession(
+        requireAuthorization(request),
+        connectionId,
+        body,
+      ),
+    };
+  }
+
+  @Post('connections/:connectionId/authorization-completions')
+  async completeConnectionAuthorization(
+    @Req() request: AuthorizedRequest,
+    @Param('connectionId') connectionId: string,
+    @Body() body: unknown,
+  ) {
+    return {
+      data: await this.service.completeConnectionAuthorization(
+        requireAuthorization(request),
+        connectionId,
+        body,
+      ),
+    };
+  }
+
+  @Post('connection-authorization-completions')
+  async completeConnectionAuthorizationFromState(
+    @Req() request: AuthorizedRequest,
+    @Body() body: unknown,
+  ) {
+    return {
+      data: await this.service.completeConnectionAuthorizationFromState(
+        requireAuthorization(request),
+        body,
+      ),
+    };
+  }
+
   @Patch('connections/:connectionId')
   async updateConnection(
     @Req() request: AuthorizedRequest,
