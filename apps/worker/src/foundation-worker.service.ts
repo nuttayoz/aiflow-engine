@@ -20,6 +20,7 @@ import {
   FakeSharePointGraphAdapter,
   microsoftSharePointConnector,
   SharePointManagedEntryProvisioner,
+  SharePointSyncProcessor,
 } from '@aiflow/connector-microsoft-sharepoint';
 import { phase1SyntheticConnector } from '@aiflow/connector-phase1-synthetic';
 import { ConnectorRegistry } from '@aiflow/connector-sdk';
@@ -28,6 +29,7 @@ import {
   PostgresExecutionRepository,
   PostgresPipelineRepository,
   PostgresSharePointProvisioningRepository,
+  PostgresSharePointSyncRepository,
   PostgresWorkflowProvisioningRepository,
   PostgresWorkflowRepository,
 } from '@aiflow/database';
@@ -60,6 +62,7 @@ import {
 
 const MESSAGE_TYPES = [
   'aiflow.workflow.provisioning.requested.v1',
+  'aiflow.connector.microsoft-sharepoint.watch.reconcile.requested.v1',
   'aiflow.execution.stage.extract.requested.v1',
   'aiflow.execution.stage.map.requested.v1',
   'aiflow.execution.stage.reconcile.requested.v1',
@@ -78,6 +81,12 @@ interface StageData extends Readonly<Record<string, unknown>> {
   readonly stage: 'DELIVER' | 'EXTRACT' | 'MAP';
 }
 
+interface SharePointSyncData extends Readonly<Record<string, unknown>> {
+  readonly expectedNotificationGeneration: number;
+  readonly expectedStateVersion: number;
+  readonly watchId: string;
+}
+
 @Injectable()
 export class FoundationWorkerService
   implements MessageHandler, OnApplicationBootstrap, OnApplicationShutdown
@@ -89,6 +98,7 @@ export class FoundationWorkerService
   private mapping?: MappingProcessor;
   private pipeline?: PostgresPipelineRepository;
   private provisioning?: WorkflowProvisioningService;
+  private sharePointSync?: SharePointSyncProcessor;
   private delivery?: BusinessCentralDeliveryProcessor;
   private storage?: S3ObjectStorage;
 
@@ -125,6 +135,9 @@ export class FoundationWorkerService
     ]);
     const extractionProvider = new FakeExtractionProvider();
     const businessCentral = new FakeBusinessCentralDestination();
+    const sharePointRuntime = this.syntheticStagesEnabled
+      ? this.createFakeSharePointRuntime(schema)
+      : undefined;
     this.extraction = new ExtractionProcessor(
       this.pipeline,
       this.executions,
@@ -163,10 +176,9 @@ export class FoundationWorkerService
         microsoftSharePointConnector,
         phase1SyntheticConnector,
       ]),
-      this.syntheticStagesEnabled
-        ? [this.createFakeSharePointProvisioner(schema)]
-        : [],
+      sharePointRuntime === undefined ? [] : [sharePointRuntime.provisioner],
     );
+    this.sharePointSync = sharePointRuntime?.sync;
 
     await Promise.all(
       this.queueNames.map((queueName) => this.rabbitMq.start(queueName, this)),
@@ -180,15 +192,20 @@ export class FoundationWorkerService
   async handle(envelope: MessageEnvelope): Promise<MessageHandlingOutcome> {
     try {
       const outcome =
-        envelope.type === 'aiflow.workflow.provisioning.requested.v1'
-          ? await this.handleProvisioning(
-              envelope as MessageEnvelope<ProvisioningData>,
+        envelope.type ===
+        'aiflow.connector.microsoft-sharepoint.watch.reconcile.requested.v1'
+          ? await this.handleSharePointSync(
+              envelope as MessageEnvelope<SharePointSyncData>,
             )
-          : envelope.type === 'aiflow.execution.stage.reconcile.requested.v1'
-            ? await this.handleReconciliation(
-                envelope as MessageEnvelope<StageData>,
+          : envelope.type === 'aiflow.workflow.provisioning.requested.v1'
+            ? await this.handleProvisioning(
+                envelope as MessageEnvelope<ProvisioningData>,
               )
-            : await this.handleStage(envelope as MessageEnvelope<StageData>);
+            : envelope.type === 'aiflow.execution.stage.reconcile.requested.v1'
+              ? await this.handleReconciliation(
+                  envelope as MessageEnvelope<StageData>,
+                )
+              : await this.handleStage(envelope as MessageEnvelope<StageData>);
       this.telemetry.recordMessage(envelope.type, outcome);
       return outcome;
     } catch (error) {
@@ -213,6 +230,25 @@ export class FoundationWorkerService
       tenantId: envelope.tenantId,
     });
     return operation === undefined ? 'STALE' : 'CLAIMED';
+  }
+
+  private async handleSharePointSync(
+    envelope: MessageEnvelope<SharePointSyncData>,
+  ): Promise<MessageHandlingOutcome> {
+    if (this.sharePointSync === undefined) {
+      throw new Error('SHAREPOINT_GRAPH_ADAPTER_NOT_CONFIGURED');
+    }
+    const outcome = await this.sharePointSync.process({
+      consumerName: this.consumerName,
+      leaseDurationMs: 30_000,
+      leaseOwner: this.consumerName,
+      messageId: envelope.messageId,
+      messageType: envelope.type,
+      projectId: envelope.projectId,
+      tenantId: envelope.tenantId,
+      watchId: envelope.data.watchId,
+    });
+    return outcome === 'STALE' ? 'STALE' : 'CLAIMED';
   }
 
   private async handleStage(
@@ -307,9 +343,10 @@ export class FoundationWorkerService
     return this.mapping;
   }
 
-  private createFakeSharePointProvisioner(
-    schema: string,
-  ): SharePointManagedEntryProvisioner {
+  private createFakeSharePointRuntime(schema: string): {
+    readonly provisioner: SharePointManagedEntryProvisioner;
+    readonly sync: SharePointSyncProcessor;
+  } {
     const key = {
       keyVersion: this.sharePointConfig.currentKeyVersion,
       rootKey: this.sharePointConfig.rootKey,
@@ -335,20 +372,31 @@ export class FoundationWorkerService
         },
       ],
     });
+    const cursorProtector = new AesGcmSharePointCursorProtector(
+      [key],
+      this.sharePointConfig.currentKeyVersion,
+    );
     const repository = new PostgresSharePointProvisioningRepository(
       this.database.dataSource,
       schema,
-      new AesGcmSharePointCursorProtector(
+      cursorProtector,
+    );
+    return {
+      provisioner: new SharePointManagedEntryProvisioner(
+        repository,
+        graph,
         [key],
         this.sharePointConfig.currentKeyVersion,
+        this.sharePointConfig.callbackUrl,
       ),
-    );
-    return new SharePointManagedEntryProvisioner(
-      repository,
-      graph,
-      [key],
-      this.sharePointConfig.currentKeyVersion,
-      this.sharePointConfig.callbackUrl,
-    );
+      sync: new SharePointSyncProcessor(
+        new PostgresSharePointSyncRepository(
+          this.database.dataSource,
+          schema,
+          cursorProtector,
+        ),
+        graph,
+      ),
+    };
   }
 }

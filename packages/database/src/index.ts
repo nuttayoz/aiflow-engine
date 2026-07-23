@@ -11,6 +11,8 @@ export * from './pipeline.repository';
 export * from './scheduler.repository';
 export * from './sharepoint.repository';
 export * from './sharepoint-provisioning.repository';
+export * from './sharepoint-recovery.repository';
+export * from './sharepoint-sync.repository';
 export * from './storage-object.repository';
 export * from './upload-session.repository';
 export * from './workflow.repository';

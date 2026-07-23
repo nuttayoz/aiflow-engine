@@ -18,6 +18,7 @@ describe('parseQueueSelection', () => {
       'aiflow.q.stage.map.v1',
       'aiflow.q.stage.reconcile.v1',
       'aiflow.q.connector.microsoft-business-central.deliver.v1',
+      'aiflow.q.connector.microsoft-sharepoint.sync.v1',
       'aiflow.q.connector.phase1-synthetic.deliver.v1',
     ]);
   });

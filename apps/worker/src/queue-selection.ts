@@ -9,6 +9,7 @@ const DEFAULT_FOUNDATION_SELECTIONS = [
   'map',
   'reconcile',
   'microsoft-business-central',
+  'sharepoint-sync',
   'phase1-synthetic',
 ] as const;
 
@@ -43,6 +44,9 @@ export const resolveQueueNames = (selections: readonly string[]): string[] => {
     if (selection === 'microsoft-business-central') {
       return connectorQueueBinding('microsoft-business-central', 'deliver')
         .name;
+    }
+    if (selection === 'sharepoint-sync') {
+      return connectorQueueBinding('microsoft-sharepoint', 'sync').name;
     }
     const queueName = queueNameForSelection(selection);
     if (queueName === undefined) {

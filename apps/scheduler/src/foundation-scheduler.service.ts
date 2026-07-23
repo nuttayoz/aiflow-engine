@@ -17,6 +17,7 @@ import {
   PostgresOutboxRepository,
   PostgresPipelineRepository,
   PostgresSchedulerLeaseRepository,
+  PostgresSharePointRecoveryRepository,
   PostgresUploadSessionRepository,
 } from '@aiflow/database';
 import {
@@ -66,6 +67,10 @@ export class FoundationSchedulerService
       schema,
     );
     const uploadSessions = new PostgresUploadSessionRepository(
+      this.database.dataSource,
+      schema,
+    );
+    const sharePointRecovery = new PostgresSharePointRecoveryRepository(
       this.database.dataSource,
       schema,
     );
@@ -129,6 +134,15 @@ export class FoundationSchedulerService
             }
           }
         }
+      }),
+      this.runLoop('sharepoint-recovery', 5_000, async () => {
+        const lease = await leases.acquire({
+          durationMs: 10_000,
+          jobName: 'sharepoint-recovery',
+          owner: this.owner,
+        });
+        if (lease === undefined) return;
+        await sharePointRecovery.enqueueDueReconciliations(100);
       }),
     ];
   }

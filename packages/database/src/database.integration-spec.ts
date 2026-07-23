@@ -16,6 +16,7 @@ import {
   AesGcmSharePointCursorProtector,
   FakeSharePointGraphAdapter,
   SharePointManagedEntryProvisioner,
+  SharePointSyncProcessor,
 } from '@aiflow/connector-microsoft-sharepoint';
 import type { ValidatedWorkflowDefinition } from '@aiflow/workflows';
 
@@ -35,6 +36,8 @@ import {
 } from './scheduler.repository';
 import { PostgresSharePointRepository } from './sharepoint.repository';
 import { PostgresSharePointProvisioningRepository } from './sharepoint-provisioning.repository';
+import { PostgresSharePointRecoveryRepository } from './sharepoint-recovery.repository';
+import { PostgresSharePointSyncRepository } from './sharepoint-sync.repository';
 import { PostgresStorageObjectRepository } from './storage-object.repository';
 import { PostgresWorkflowProvisioningRepository } from './workflow-provisioning.repository';
 import { PostgresWorkflowRepository } from './workflow.repository';
@@ -1247,6 +1250,128 @@ describe('PostgreSQL foundation', () => {
     expect(
       cursorProtector.unprotect(state!.committed_delta_cursor_ciphertext),
     ).toBe('confidential-final-delta-cursor');
+
+    graph.setDeltaPage(
+      connectionId,
+      target.driveId,
+      'confidential-final-delta-cursor',
+      {
+        finalCursor: 'confidential-next-delta-cursor',
+        items: [
+          {
+            cTag: 'new-file-ctag',
+            contentType: 'application/pdf',
+            eTag: 'new-file-etag',
+            id: 'new-file-1',
+            kind: 'FILE',
+            name: 'new-invoice.pdf',
+            parentId: target.folderId,
+            sizeBytes: 456,
+          },
+        ],
+      },
+    );
+    const sync = new SharePointSyncProcessor(
+      new PostgresSharePointSyncRepository(
+        runtimeDataSource,
+        runtimeConfig.schema,
+        cursorProtector,
+      ),
+      graph,
+      () => new Date('2026-07-23T00:01:00.000Z'),
+    );
+    const [watchIdentity] = (await runtimeDataSource.query(
+      `
+        SELECT watch.id
+        FROM aiflow.sharepoint_drive_watches AS watch
+        WHERE watch.tenant_id = $1 AND watch.drive_id = $2
+      `,
+      [tenantId, target.driveId],
+    )) as { id: string }[];
+    await expect(
+      sync.process({
+        consumerName: 'sharepoint-sync-worker',
+        leaseDurationMs: 30_000,
+        leaseOwner: 'sharepoint-sync-worker',
+        messageId: randomUUID(),
+        messageType:
+          'aiflow.connector.microsoft-sharepoint.watch.reconcile.requested.v1',
+        projectId,
+        tenantId,
+        watchId: watchIdentity!.id,
+      }),
+    ).resolves.toBe('PROCESSED');
+
+    const [synced] = (await runtimeDataSource.query(
+      `
+        SELECT
+          watch.committed_delta_cursor_ciphertext,
+          watch.sync_command_pending,
+          (
+            SELECT count(*)::int
+            FROM aiflow.document_ingestions AS ingestion
+            WHERE ingestion.tenant_id = watch.tenant_id
+              AND ingestion.watch_id = watch.id
+          ) AS ingestion_count,
+          (
+            SELECT count(*)::int
+            FROM aiflow.outbox_messages AS outbox
+            WHERE outbox.tenant_id = watch.tenant_id
+              AND outbox.aggregate_type = 'DOCUMENT_INGESTION'
+          ) AS ingestion_outbox_count
+        FROM aiflow.sharepoint_drive_watches AS watch
+        WHERE watch.tenant_id = $1 AND watch.id = $2
+      `,
+      [tenantId, watchIdentity!.id],
+    )) as {
+      committed_delta_cursor_ciphertext: Buffer;
+      ingestion_count: number;
+      ingestion_outbox_count: number;
+      sync_command_pending: boolean;
+    }[];
+    expect(synced).toMatchObject({
+      ingestion_count: 1,
+      ingestion_outbox_count: 1,
+      sync_command_pending: false,
+    });
+    expect(
+      cursorProtector.unprotect(synced!.committed_delta_cursor_ciphertext),
+    ).toBe('confidential-next-delta-cursor');
+
+    await runtimeDataSource.query(
+      `
+        UPDATE aiflow.sharepoint_drive_watches
+        SET next_reconcile_at = clock_timestamp() - interval '1 second'
+        WHERE tenant_id = $1 AND id = $2
+      `,
+      [tenantId, watchIdentity!.id],
+    );
+    await expect(
+      new PostgresSharePointRecoveryRepository(
+        runtimeDataSource,
+        runtimeConfig.schema,
+      ).enqueueDueReconciliations(100),
+    ).resolves.toBe(1);
+    const [scheduled] = (await runtimeDataSource.query(
+      `
+        SELECT
+          watch.sync_command_pending,
+          (
+            SELECT count(*)::int
+            FROM aiflow.outbox_messages AS outbox
+            WHERE outbox.tenant_id = watch.tenant_id
+              AND outbox.aggregate_type = 'SHAREPOINT_DRIVE_WATCH'
+              AND outbox.aggregate_id = watch.id::text
+          ) AS sync_outbox_count
+        FROM aiflow.sharepoint_drive_watches AS watch
+        WHERE watch.tenant_id = $1 AND watch.id = $2
+      `,
+      [tenantId, watchIdentity!.id],
+    )) as { sync_command_pending: boolean; sync_outbox_count: number }[];
+    expect(scheduled).toEqual({
+      sync_command_pending: true,
+      sync_outbox_count: 1,
+    });
   });
 
   it('deduplicates SharePoint callbacks and coalesces their durable wake-up', async () => {

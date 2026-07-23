@@ -10,6 +10,7 @@ export * from './graph-port';
 export * from './notification';
 export * from './provisioning';
 export * from './protection';
+export * from './sync';
 
 export const microsoftSharePointDescriptor = {
   actions: [
