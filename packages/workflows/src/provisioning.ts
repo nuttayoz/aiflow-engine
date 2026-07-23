@@ -1,17 +1,36 @@
 import type { ConnectorRegistry } from '@aiflow/connector-sdk';
 
 import type {
+  ManagedEntryProvisioner,
   ProvisioningOperationRecord,
   WorkflowProvisioningRepository,
   WorkflowRepository,
 } from './ports';
 
 export class WorkflowProvisioningService {
+  private readonly managedEntryProvisioners: ReadonlyMap<
+    string,
+    ManagedEntryProvisioner
+  >;
+
   constructor(
     private readonly operations: WorkflowProvisioningRepository,
     private readonly workflows: WorkflowRepository,
     private readonly connectors: ConnectorRegistry,
-  ) {}
+    managedEntryProvisioners: readonly ManagedEntryProvisioner[] = [],
+  ) {
+    this.managedEntryProvisioners = new Map(
+      managedEntryProvisioners.map((provisioner) => [
+        provisioner.connectorId,
+        provisioner,
+      ]),
+    );
+    if (
+      this.managedEntryProvisioners.size !== managedEntryProvisioners.length
+    ) {
+      throw new Error('MANAGED_CONNECTOR_PROVISIONER_DUPLICATE');
+    }
+  }
 
   async processActivation(input: {
     readonly consumerName: string;
@@ -59,7 +78,7 @@ export class WorkflowProvisioningService {
       throw new Error('CONNECTOR_NOT_INSTALLED');
     }
 
-    await Promise.all([
+    const [entryActivation] = await Promise.all([
       entryConnector.validateActivation({
         actionId: entryAction.actionId,
         configuration: version.definition.definition.entry.config,
@@ -85,9 +104,46 @@ export class WorkflowProvisioningService {
       }),
     ]);
 
+    let managedBindingId: string | undefined;
+    if (entryAction.provisioningMode === 'MANAGED') {
+      const connectionId = version.definition.definition.entry.connectionId;
+      if (connectionId === undefined) {
+        throw new Error('MANAGED_CONNECTOR_CONNECTION_REQUIRED');
+      }
+      const provisioner = this.managedEntryProvisioners.get(
+        entryConnector.descriptor.connectorId,
+      );
+      if (provisioner === undefined) {
+        throw new Error('MANAGED_CONNECTOR_PROVISIONER_NOT_INSTALLED');
+      }
+      const result = await provisioner.prepare({
+        actionId: entryAction.actionId,
+        capabilityHash: entryActivation.capabilityHash,
+        configuration: version.definition.definition.entry.config,
+        configurationHash: version.definition.definitionHash,
+        connectionId,
+        operationId: operation.id,
+        projectId: operation.projectId,
+        tenantId: operation.tenantId,
+        workflowId: operation.workflowId,
+        workflowVersionId: version.id,
+      });
+      if (result.status === 'PENDING') {
+        return this.operations.deferActivation({
+          expectedStateVersion: operation.stateVersion,
+          leaseOwner: input.leaseOwner,
+          nextAttemptAt: result.retryAt,
+          operationId: operation.id,
+          tenantId: operation.tenantId,
+        });
+      }
+      managedBindingId = result.bindingId;
+    }
+
     return this.operations.completeActivation({
       expectedStateVersion: operation.stateVersion,
       leaseOwner: input.leaseOwner,
+      ...(managedBindingId === undefined ? {} : { managedBindingId }),
       operationId: operation.id,
       tenantId: operation.tenantId,
     });

@@ -175,6 +175,14 @@ export interface WorkflowProvisioningRepository {
   completeActivation(input: {
     readonly expectedStateVersion: number;
     readonly leaseOwner: string;
+    readonly managedBindingId?: string;
+    readonly operationId: string;
+    readonly tenantId: string;
+  }): Promise<ProvisioningOperationRecord>;
+  deferActivation(input: {
+    readonly expectedStateVersion: number;
+    readonly leaseOwner: string;
+    readonly nextAttemptAt: Date;
     readonly operationId: string;
     readonly tenantId: string;
   }): Promise<ProvisioningOperationRecord>;
@@ -192,4 +200,30 @@ export interface WorkflowProvisioningRepository {
   requestDeactivation(
     input: RequestWorkflowDeactivationInput,
   ): Promise<WorkflowDeactivationResult>;
+}
+
+export type ManagedEntryProvisioningResult =
+  | {
+      readonly bindingId: string;
+      readonly status: 'READY';
+    }
+  | {
+      readonly retryAt: Date;
+      readonly status: 'PENDING';
+    };
+
+export interface ManagedEntryProvisioner {
+  readonly connectorId: string;
+  prepare(input: {
+    readonly actionId: string;
+    readonly capabilityHash: string;
+    readonly configuration: Readonly<Record<string, unknown>>;
+    readonly configurationHash: string;
+    readonly connectionId: string;
+    readonly operationId: string;
+    readonly projectId: string;
+    readonly tenantId: string;
+    readonly workflowId: string;
+    readonly workflowVersionId: string;
+  }): Promise<ManagedEntryProvisioningResult>;
 }

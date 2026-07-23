@@ -143,6 +143,7 @@ const parseDeactivationResult = (
 
 export class PostgresWorkflowProvisioningRepository implements WorkflowProvisioningRepository {
   private readonly auditEvents: string;
+  private readonly bindings: string;
   private readonly idempotency: string;
   private readonly inboxMessages: string;
   private readonly operations: string;
@@ -155,6 +156,7 @@ export class PostgresWorkflowProvisioningRepository implements WorkflowProvision
     schema: string,
   ) {
     this.auditEvents = table(schema, 'audit_events');
+    this.bindings = table(schema, 'connector_provisioning_bindings');
     this.idempotency = table(schema, 'idempotency_records');
     this.inboxMessages = table(schema, 'inbox_messages');
     this.operations = table(schema, 'workflow_activation_operations');
@@ -614,6 +616,7 @@ export class PostgresWorkflowProvisioningRepository implements WorkflowProvision
   async completeActivation(input: {
     readonly expectedStateVersion: number;
     readonly leaseOwner: string;
+    readonly managedBindingId?: string;
     readonly operationId: string;
     readonly tenantId: string;
   }): Promise<ProvisioningOperationRecord> {
@@ -640,6 +643,39 @@ export class PostgresWorkflowProvisioningRepository implements WorkflowProvision
       const operation = rows[0];
       if (operation?.target_version_id === null || operation === undefined) {
         throw new Error('PROVISIONING_LEASE_LOST');
+      }
+
+      if (input.managedBindingId !== undefined) {
+        const bindings = mutationRows<{ id: string }>(
+          await manager.query(
+            `
+              UPDATE ${this.bindings}
+              SET status = 'ACTIVE',
+                  health = 'HEALTHY',
+                  accepting_new_documents = true,
+                  state_version = state_version + 1,
+                  failure_code = NULL,
+                  updated_at = clock_timestamp()
+              WHERE tenant_id = $1
+                AND project_id = $2
+                AND workflow_id = $3
+                AND workflow_version_id = $4
+                AND id = $5
+                AND status = 'PREPARING'
+              RETURNING id
+            `,
+            [
+              operation.tenant_id,
+              operation.project_id,
+              operation.workflow_id,
+              operation.target_version_id,
+              input.managedBindingId,
+            ],
+          ),
+        );
+        if (bindings.length !== 1) {
+          throw new Error('MANAGED_CONNECTOR_BINDING_NOT_READY');
+        }
       }
 
       const workflows = mutationRows<{ id: string }>(
@@ -719,6 +755,80 @@ export class PostgresWorkflowProvisioningRepository implements WorkflowProvision
       throw new Error('PROVISIONING_OPERATION_INCONSISTENT');
     }
     return operation;
+  }
+
+  async deferActivation(input: {
+    readonly expectedStateVersion: number;
+    readonly leaseOwner: string;
+    readonly nextAttemptAt: Date;
+    readonly operationId: string;
+    readonly tenantId: string;
+  }): Promise<ProvisioningOperationRecord> {
+    if (
+      !Number.isFinite(input.nextAttemptAt.getTime()) ||
+      input.nextAttemptAt.getTime() <= Date.now() ||
+      input.nextAttemptAt.getTime() > Date.now() + 24 * 60 * 60 * 1_000
+    ) {
+      throw new Error('PROVISIONING_RETRY_AT_INVALID');
+    }
+    const row = await this.dataSource.transaction(async (manager) => {
+      const rows = mutationRows<OperationRow>(
+        await manager.query(
+          `
+            UPDATE ${this.operations}
+            SET status = 'WAITING_RETRY',
+                current_step = 'PROVISION',
+                state_version = state_version + 1,
+                next_attempt_at = $5,
+                lease_owner = NULL,
+                lease_expires_at = NULL,
+                updated_at = clock_timestamp()
+            WHERE tenant_id = $1
+              AND id = $2
+              AND state_version = $3
+              AND status = 'RUNNING'
+              AND lease_owner = $4
+              AND lease_expires_at > clock_timestamp()
+            RETURNING ${operationColumns}
+          `,
+          [
+            input.tenantId,
+            input.operationId,
+            input.expectedStateVersion,
+            input.leaseOwner,
+            input.nextAttemptAt,
+          ],
+        ),
+      );
+      const operation = rows[0];
+      if (operation === undefined) {
+        throw new Error('PROVISIONING_LEASE_LOST');
+      }
+      const message = createMessageEnvelope({
+        actor: { id: operation.actor_id, type: operation.actor_type },
+        causationId: operation.id,
+        correlationId: operation.correlation_id,
+        data: {
+          expectedStateVersion: Number(operation.state_version),
+          provisioningOperationId: operation.id,
+        },
+        occurredAt: new Date(),
+        projectId: operation.project_id,
+        tenantId: operation.tenant_id,
+        type: 'aiflow.workflow.provisioning.requested.v1',
+      });
+      if (manager.queryRunner === undefined) {
+        throw new Error('DATABASE_TRANSACTION_REQUIRED');
+      }
+      await this.outbox.append(manager.queryRunner, {
+        aggregateId: operation.id,
+        aggregateType: 'PROVISIONING_OPERATION',
+        availableAt: input.nextAttemptAt,
+        envelope: message,
+      });
+      return operation;
+    });
+    return mapOperation(row);
   }
 
   async findById(
