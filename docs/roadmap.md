@@ -10,12 +10,13 @@ This roadmap controls implementation order. A phase starts only after its entry 
 | Phase 0B | Contract and platform discovery    | Complete      |
 | Phase 1  | Reliable engine foundation         | Code complete |
 | Phase 2  | Direct-upload proof and demo       | Complete      |
-| Phase 3  | Existing DevPortal compatibility   | Not started   |
+| Phase 3  | Existing DevPortal compatibility   | In progress   |
 | Phase 4  | SharePoint entry and destination   | Not started   |
 | Phase 5  | Templates and review               | Not started   |
 | Phase 6  | Migration, cutover, and retirement | Not started   |
 
-Phase 2 is complete. Phase 3 and later product behavior is not implemented.
+Phase 2 is complete. Phase 3 compatibility implementation is in progress;
+Phase 4 and later product behavior is not implemented.
 
 ## Phase 0A: repository skeleton
 
@@ -246,7 +247,7 @@ Exit criteria:
 - An API-only operator can inspect, retry, and audit the execution.
 - The internal demo UI proves the DevPortal-shaped journey against the real engine APIs without database, queue, or worker backdoors.
 - Canonical request/response fixtures from the demo are frozen for the Phase 3 DevPortal client migration.
-- The real `devportal` and `devportal-backend` repositories remain unchanged throughout Phase 2.
+- The real frontend and `devportal-backend` repositories remain unchanged throughout Phase 2.
 
 Verification:
 
@@ -263,25 +264,34 @@ Verification:
 
 ## Phase 3: existing DevPortal compatibility and provisioning
 
+Status: in progress; the source compatibility baseline has been revalidated and
+canonical workflow lifecycle gaps are the first implementation slice.
+
 Purpose: make the new engine fit the current UI rather than rebuilding the frontend.
 
-Entry gate: Phase 2 has passed its engine reliability, end-to-end demo, and canonical-contract exit criteria. The real DevPortal is not modified before this gate.
+Entry gate: Phase 2 has passed its engine reliability, end-to-end demo, and canonical-contract exit criteria. The real `devportal-frontend` is not modified before this gate.
 
 Scope:
 
-- Keep existing DevPortal project/workflow navigation, three-step wizard, workflow table, upload/demo, and review journeys.
-- Update the existing DevPortal workflow service to call AiFlow Engine directly through the platform API gateway.
+- Keep the existing `devportal-frontend` project/workflow navigation, workflow builder sections, workflow table, upload/demo, execution, and review journeys.
+- Update the existing workflow API/query layer to call AiFlow Engine through the same-origin Next.js BFF and platform API gateway.
 - Submit and consume canonical engine resources; legacy v1/v2 payloads are migration inputs only.
 - Replace only Google/n8n-specific Step Two controls with connector configuration.
 - Add direct browser-to-S3 upload to the existing demo/upload flow.
 - Show engine execution status, error details, and safe retry in existing UI areas.
-- Remove browser-generated `x-client-id`; derive tenant and actor from the validated token.
+- Do not send `x-client-id` to AiFlow Engine; the BFF forwards bearer authentication and the engine derives tenant and actor from the validated token.
 - Create, version, validate, activate, deactivate, and delete workflows through the engine.
+
+Implemented Phase 3 slices:
+
+- Immutable workflow-version create/list/get APIs with optimistic edit context,
+  idempotent creation, tenant/project authorization, audit facts, and typed
+  client support for both direct-bearer and same-origin BFF composition.
 
 Exit criteria:
 
-- A user can create and activate the Phase 2 workflow using the existing three-step DevPortal flow.
-- Existing routes, Redux organization, and general visual structure remain intact.
+- A user can create and activate the Phase 2 workflow using the existing DevPortal builder journey.
+- Existing App Router paths, TanStack Query/Zustand ownership, feature boundaries, and general visual structure remain intact.
 - Canonical UI/API contracts and legacy migration mappings are covered by separate contract tests.
 - No n8n workflow, user, credential, tag, or database record is created for a new workflow.
 - Legacy compatibility names do not appear in engine-core entities.

@@ -1,43 +1,94 @@
 # DevPortal compatibility contract
 
-Status: discovery baseline, 2026-07-14.
+Status: Phase 3 implementation baseline, corrected and revalidated 2026-07-22.
 
 This document records the current AiFlow contract that the existing DevPortal UI consumes and defines the compatibility boundary for AiFlow Engine. It separates behavior that users rely on from n8n and Google implementation details that must not enter the engine core.
 
 ## Evidence and scope
 
-The baseline was read from these repository snapshots:
+The active Phase 3 baseline was read from these repository snapshots:
 
-- `devportal` at `2fc93d8ba136846f45df3a5d0f2bfa7e6b1cc38f`
-- `devportal-backend` at `c546a2fdedf2fe26719c1effd5ccfe71c068dfe6`
-- `aiflow-engine` starting point at `4269c0a297d52e57492b4c7d36aef779a128c52d`
+- `devportal-frontend` at `f1c9a9bad23c357a67fef1ddfaba1a8a4d0fa436`,
+  based on `origin/feature/new-uxui`
+- `devportal-backend` at `4b74f99c5370aab7c55ceeb639510abe7a9fbca0`,
+  based on `origin/develop`
+- `aiflow-engine` Phase 3 starting point at
+  `84b646e4d6e0a97c41f8c53d258db8fe6bae633f`
 
 Primary evidence:
 
-- `devportal/frontend/src/constants/api.js`
-- `devportal/frontend/src/constants/paths.js`
-- `devportal/frontend/src/services/workflow.service.js`
-- `devportal/frontend/src/routes/Workflow/**`
-- `devportal/frontend/src/routes/ReviewAPI/**`
+- `devportal-frontend/frontend/src/lib/api/client.ts`
+- `devportal-frontend/frontend/src/lib/api/endpoints.ts`
+- `devportal-frontend/frontend/src/app/api/proxy/[...path]/route.ts`
+- `devportal-frontend/frontend/src/types/workflow.ts`
+- `devportal-frontend/frontend/src/features/workflows/api/**`
+- `devportal-frontend/frontend/src/features/workflows/components/**`
+- `devportal-frontend/frontend/src/app/(main)/workflows/**`
 - `devportal-backend/src/routes/workflow.routes.js`
-- `devportal-backend/src/controllers/workflow/**`
+- `devportal-backend/src/handler/workflow/**`
 - `devportal-backend/document/aiflow.md`
+
+The earlier `devportal` snapshot at
+`2fc93d8ba136846f45df3a5d0f2bfa7e6b1cc38f` remains historical discovery
+evidence only. It is not the integration target. Its local checkout was removed
+after the corrected frontend was verified so the two implementations cannot be
+confused.
 
 The findings below are source-code contracts, not captured production traffic. Production consumers, edge routing, and deployed payload variants still need validation.
 
+The corrected repositories were clean before branching. Both now use the local
+branch `phase3/aiflow-engine-integration`, created from the exact frontend and
+backend bases listed above. The frontend is a Next.js App Router application
+using TanStack Query and localized feature modules; compatibility work must
+preserve that structure and the current UX rather than the historical Redux
+implementation.
+
+## Phase 3 implementation readiness
+
+Phase 2 proved the canonical direct-upload journey without changing either
+legacy repository. The remaining compatibility work is intentionally divided
+at the public API and frontend service seams:
+
+| Surface                  | Engine state at Phase 3 entry                        | Phase 3 action                                                                                               |
+| ------------------------ | ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| Workflow create/list/get | Implemented and exercised by the demo harness        | Reuse directly from the existing workflow service                                                            |
+| Immutable workflow edit  | Create/list/get API and typed client implemented     | Migrate the edit builder after activation/archive lifecycle projections are complete                         |
+| Activation               | Activation request and operation polling implemented | Add activation read and idempotent deactivation                                                              |
+| Workflow removal         | Not implemented                                      | Add archive/delete policy and API behavior                                                                   |
+| Catalogs                 | Connector and extraction-profile list implemented    | Add only detail/projection fields required by the existing wizard                                            |
+| Connections              | Not implemented                                      | Add Business Central connection APIs before exposing real destination setup                                  |
+| Direct upload/execution  | Implemented, including retry and recovery            | Replace the demo page's base64 invocation at its service boundary                                            |
+| Authentication           | Local test identity only; production fails closed    | Add the approved OIDC and project-authorization adapters before real DevPortal traffic                       |
+| Review                   | Engine review resources are intentionally deferred   | Preserve legacy routes for existing workflows; new review-enabled workflows remain unavailable until Phase 5 |
+
+Implementation order:
+
+1. Complete the canonical workflow lifecycle and typed client in AiFlow Engine.
+2. Add the production authentication/project-authorization boundary once the
+   platform claim and endpoint values are supplied.
+3. Integrate through the existing API/query seams on the prepared
+   `devportal-frontend` Phase 3 branch; preserve App Router paths, TanStack Query
+   ownership, feature boundaries, and the current workflow UX.
+4. Prove create, edit, activate/deactivate, archive, direct upload, execution
+   status, and retry with canonical contract fixtures.
+5. Inventory deployed legacy callers before redirecting or retiring any n8n
+   endpoint. Do not route newly created workflows through
+   `devportal-backend`.
+
 ## Fixed boundary
 
-1. Keep the existing DevPortal frontend and its project navigation, three-step wizard, workflow table, demo/upload page, and review page.
-2. DevPortal calls AiFlow Engine directly for all new AiFlow functionality through the platform API gateway.
+1. Keep `devportal-frontend` and its project navigation, workflow builder journey, workflow table, demo/upload page, execution views, and review page.
+2. DevPortal client components call same-origin Next.js BFF routes. The BFF forwards canonical requests and the authenticated bearer token to AiFlow Engine through the platform API gateway.
 3. Allow small, localized DevPortal changes where the old behavior violates the new architecture: generic connector fields, direct S3 upload, execution status/retry, opaque workflow identifiers, and authenticated tenant context.
 4. Do not expose n8n node types, n8n identifiers, Google credential shapes, or legacy payload versions in AiFlow Engine domain entities.
 5. Do not add a second frontend or make DevPortal call internal worker services.
 6. `devportal-backend` continues its non-AiFlow responsibilities and temporary legacy traffic, but the engine runtime never calls or depends on it.
-7. Keep the real `devportal` and `devportal-backend` repositories unchanged through the engine foundation and internal-demo phases. Begin localized integration only after the canonical engine flow is proven.
+7. Phase 2 kept the real frontend/backend unchanged. Phase 3 now applies localized integration only in `devportal-frontend`; `devportal-backend` remains outside the new AiFlow runtime path.
 
 ```mermaid
 flowchart LR
-    UI["Existing DevPortal UI"] -->|"canonical AiFlow API"| API["AiFlow Engine API"]
+    UI["devportal-frontend browser"] -->|"same-origin canonical calls"| BFF["Next.js BFF"]
+    BFF -->|"bearer-authenticated canonical API"| API["AiFlow Engine API"]
     UI -->|"existing non-AiFlow features"| DPB["devportal-backend"]
     UI -->|"presigned upload only"| S3["S3 document storage"]
     API --> DB["PostgreSQL"]
@@ -51,15 +102,16 @@ AiFlow Engine owns the canonical API plus workflow truth, workflow versions, con
 
 ## Current user journeys
 
-| Journey               | Current UI route                                       | Current behavior                                                                 | Compatibility decision                                                                                            |
-| --------------------- | ------------------------------------------------------ | -------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
-| Project workflow list | `/aiFlow/project/:projectId`                           | Lists workflows, activation, endpoint, edit/delete, interact, and review actions | Preserve route and table layout; consume the canonical engine list response                                       |
-| Create                | `/aiFlow/create/project/:projectId`                    | Three-step wizard: identity/service, trigger/output/fields, summary              | Preserve three steps; replace Step Two contents with schema-driven entry and destination configuration            |
-| Edit                  | `/aiFlow/edit/project/:projectId/workflow/:workflowId` | Loads one workflow and reuses the three-step shape                               | Preserve route; make `workflowId` opaque instead of calling `parseInt`                                            |
-| Connections           | `/aiFlow/credentials`                                  | CRUD for Google OAuth credentials and consent                                    | Preserve page location; present generic engine connections and provider consent                                   |
-| Demo/upload           | `/aiFlow/:workflowId`                                  | Converts a file to base64 and posts it to `endpoint_url`                         | Preserve page; intentionally replace transport with upload session -> direct S3 -> completion -> execution status |
-| Review list           | `/reviewlist/aiflow/:projectId/:workflowId`            | Lists pending review URLs for a workflow                                         | Preserve route and list; project engine review tasks into the current table shape                                 |
-| Review item           | `/review?token=...&aiflow=...&webhook=...`             | Loads data from Review API and posts approval to the workflow webhook            | Preserve page; use opaque `reviewTaskId`, engine content/preview, and authenticated idempotent decisions          |
+| Journey               | Current UI route                                  | Current behavior                                                                      | Compatibility decision                                                                                            |
+| --------------------- | ------------------------------------------------- | ------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| Project workflow list | `/workflows?projectId=...`                        | Lists workflows, activation, endpoint, edit/delete, demo, review, and history actions | Preserve route and table UX; consume the canonical engine list response                                           |
+| Create                | `/workflows/new?projectId=...`                    | Builder groups name/service, trigger, and output into the current two-page journey    | Preserve journey and business sections; replace legacy node data with schema-driven connector configuration       |
+| Edit                  | `/workflows/:workflowId/edit?projectId=...`       | Loads one workflow and reuses the builder                                             | Preserve route and opaque string identifier; map canonical workflow/version resources                             |
+| Connections           | `/workflows/credentials`                          | Manages Google and Microsoft credentials/consent                                      | Preserve page location; present generic engine connections and provider consent                                   |
+| Demo/upload           | `/workflows/:workflowId/demo?projectId=...`       | Converts a file to base64 and posts it to `endpoint_url` with `X-AIGEN-KEY`           | Preserve page; intentionally replace transport with upload session -> direct S3 -> completion -> execution status |
+| Execution history     | `/workflows/:workflowId/executions?projectId=...` | Shows legacy execution history                                                        | Preserve page and project canonical execution projections                                                         |
+| Review list           | `/workflows/:workflowId/reviews?projectId=...`    | Lists pending review URLs for a workflow                                              | Preserve route and list; project engine review tasks into the current table shape                                 |
+| Global executions     | `/workflows/executions`                           | Shows project-scoped execution history                                                | Preserve route and query canonical execution resources                                                            |
 
 ## Current legacy browser-to-BFF HTTP surface
 
@@ -78,6 +130,8 @@ All paths below are under `/devportal-backend-api`. Successful workflow response
 | `POST /workflow/:workflowId/deactivate`                             | Workflow table                                         | Replace with canonical engine deactivation plus cleanup status                                                        |
 | `GET /workflow/appevent`                                            | Step Two application list                              | Replace with direct connector/action descriptor queries                                                               |
 | `GET /workflow/appevent/operation/:appEventId`                      | Step Two event list                                    | Replace with connector action schema/options                                                                          |
+| `GET /workflow/trigger`                                             | Trigger selector                                       | Replace with entry connector descriptors                                                                              |
+| `POST /workflow/trigger/gmail-labels`                               | Gmail label picker                                     | Exclude from Microsoft-first flow; retain only for controlled legacy traffic                                          |
 | `GET /workflow/ml/field/service/:serviceId`                         | Step Two field mapping                                 | Replace with the canonical extraction-profile field schema                                                            |
 | `GET /workflow/credentials`                                         | Connections page and Step Two                          | Replace with direct engine connection queries                                                                         |
 | `GET /workflow/credential-types`                                    | Connections page                                       | Replace hard-coded Google types with connector descriptors                                                            |
@@ -88,10 +142,22 @@ All paths below are under `/devportal-backend-api`. Successful workflow response
 | `GET /workflow/credentials/consent/:credentialId`                   | Opens OAuth consent URL                                | Translate to provider-specific consent start; callback ownership must be engine/connector controlled                  |
 | `GET /workflow/gdrive/list/folder`                                  | Google folder picker                                   | Not part of the Microsoft-first release; replace with generic connection resource browsing when Google is added later |
 | `GET /workflow/gdrive/list/file`                                    | Google file/sheet picker                               | Same as above                                                                                                         |
-| `POST /workflow/gdrive/files`                                       | Creates a Google folder or spreadsheet                 | Remove from the Microsoft-first UI; future providers use connector actions rather than provider-named engine APIs     |
+| `GET /workflow/drive/files`                                         | Browses SharePoint sites, drives, folders, and files   | Replace with provider-neutral engine connection-resource browsing in Phase 4                                          |
+| `POST /workflow/drive/files`                                        | Creates a provider folder or spreadsheet               | Replace with a declared connector action rather than a drive-named engine endpoint                                    |
+| `GET /workflow/execution/:projectId`                                | Workflow and global execution-history pages            | Replace with canonical project/workflow execution queries                                                             |
+| `GET /workflow/execution/status`                                    | Execution status filter                                | Replace with canonical execution status vocabulary                                                                    |
 | `GET /workflow/review/item/project/:projectId/workflow/:workflowId` | Review list                                            | Replace with a direct canonical review-task query                                                                     |
+| `GET /workflow/microsoft/tenant/:tenantId/adminconsent/link`        | Starts Microsoft admin consent                         | Move to the engine-owned Microsoft connection/consent boundary                                                        |
+| `GET /workflow/microsoft/tenant/:tenantId/adminconsent`             | Reads Microsoft admin-consent status                   | Move to the engine-owned Microsoft connection status projection                                                       |
 
-The frontend does not currently reference these additional legacy workflow routes: `DELETE /workflow/users`, `GET /workflow/trigger`, `GET /workflow/gdrive/files`, `GET /workflow`, `GET /workflow/:workflowId`, `GET /workflow/project/:projectId/endpoint/:workflowEndpoint`, `POST /workflow/custom`, `DELETE /workflow/project/:projectId`, `POST /workflow/review/item`, and `DELETE /workflow/review/item`. They must not be declared safe to remove until non-frontend consumers and production traffic are checked.
+The frontend does not currently reference these additional legacy workflow
+operations: `DELETE /workflow/users`, `GET /workflow`,
+`GET /workflow/:workflowId`,
+`GET /workflow/project/:projectId/endpoint/:workflowEndpoint`,
+`POST /workflow/custom`, `DELETE /workflow/project/:projectId`,
+`POST /workflow/review/item`, `DELETE /workflow/review/item`, and
+`POST /workflow/execution`. They must not be declared safe to remove until
+non-frontend consumers and production traffic are checked.
 
 ## Current create and update payload
 
@@ -210,10 +276,11 @@ The UI consumes this v1-shaped projection:
 }
 ```
 
-Important consumers:
+Important consumers in the corrected frontend:
 
 - Table identity/actions use `workflow_id`, not database `id`.
-- Edit currently parses `workflowId` as an integer.
+- App Router parameters already preserve `workflowId` as a string, while the
+  legacy request/response types still require compatibility mapping.
 - Interaction routing checks `app_connection.trigger.type` for the hard-coded webhook type.
 - Google Drive entries open a hard-coded Google URL using `folderToWatch`.
 - Icons and credential warnings inspect hard-coded node and credential keys.
@@ -276,12 +343,15 @@ Connector descriptors must provide display metadata, connection requirements, JS
 
 ## Custom extraction-template compatibility
 
-No personal-template authoring/list/edit UI or document-collection integration was found in the inspected `devportal` or `devportal-backend` source. Therefore the existing workflow UX is the compatibility target, but an unverified template administration screen is not rebuilt by assumption.
+The corrected frontend contains template list/create/edit routes, template API
+hooks, custom-template demo behavior, and document-collection screens. These are
+confirmed UI consumers, but their migration remains Phase 5 work. Phase 3 must
+not silently redirect them or broaden the workflow-provisioning slice.
 
 - The existing Step One extraction selector lists built-in and authorized custom profiles from `/api/v1/extraction-profiles`.
 - A selected custom profile uses the same `definition.extraction.profileId` field as a built-in profile. Workflow-version creation freezes its exact immutable profile/template version.
 - Workflow create/edit does not send a legacy `my_template_endpoint`, `client_id`, engine/model ID, direct-invoke URL, prompt envelope, or document bytes.
-- Template authoring, if required in DevPortal, is a localized tenant administration journey over `/api/v1/extraction-templates`; it is separate from document upload/execution.
+- Template authoring is migrated as a localized tenant administration journey over `/api/v1/extraction-templates`; it remains separate from document upload/execution.
 - Existing workflows that store `(client_id, my_template_endpoint)` are migration inputs. A bounded alias may resolve them during migration/cutover, but execution never calls `personal-template-backend` to discover fields.
 - Direct single/multiple-file invocation and document collections require confirmed consumers and their own migration decision; they are not silently projected into the workflow wizard.
 
@@ -301,10 +371,10 @@ It posts directly to `endpoint_url` with a project `X-AIGEN-KEY`. For review it 
 
 The localized replacement flow is:
 
-1. DevPortal requests an upload session for a workflow.
+1. DevPortal requests an upload session through its same-origin BFF.
 2. AiFlow Engine authorizes project/workflow access and returns a short-lived presigned single-part or multipart S3 upload plan.
 3. The browser streams the file directly to S3.
-4. DevPortal completes the upload session with size, checksum, content type, and idempotency key.
+4. DevPortal completes the upload session through its BFF with size, checksum, content type, and idempotency key.
 5. AiFlow Engine durably creates one document/execution and returns `executionId`.
 6. The existing page shows state, failure details, and safe retry by querying the execution.
 
@@ -342,11 +412,16 @@ The exact provider-neutral task, artifact, decision, retry, expiry, cleanup, and
 
 ## Authentication and tenancy finding
 
-The workflow frontend reads `user.sub` from local storage and sends it as `x-client-id` on every workflow request. The legacy workflow routes import Keycloak but do not apply `keycloak.protect(...)`; other backend route groups do. Repository code therefore does not prove authentication or tenant binding for the workflow routes. An upstream gateway may add protection, but that was not validated here.
+The corrected frontend keeps access and refresh tokens in HTTP-only cookies and
+uses a same-origin Next.js BFF. The BFF forwards `Authorization: Bearer ...`, but
+its current compatibility code also derives or injects `x-client-id`. The legacy
+workflow routes import Keycloak but do not apply `keycloak.protect(...)`; other
+backend route groups do. Repository code therefore still does not prove secure
+tenant binding for the legacy workflow routes.
 
 The replacement contract is non-negotiable:
 
-- DevPortal sends its bearer token through the normal authenticated client.
+- Browser code calls same-origin BFF routes; the BFF forwards the bearer token to AiFlow Engine server-side.
 - AiFlow Engine validates issuer, audience, signature, expiry, and required roles using the platform authentication contract.
 - Tenant, actor, and service identity are derived from agreed claims and server-side project ownership.
 - `x-client-id` may not select a tenant under any mode.
@@ -399,21 +474,22 @@ Contract tests should assert the direct DevPortal/engine contract separately fro
 
 ## Localized DevPortal change list
 
-| Area                           | Required change                                                                                                    |
-| ------------------------------ | ------------------------------------------------------------------------------------------------------------------ |
-| `services/workflow.service.js` | Send bearer authentication, remove `x-client-id`, and add upload/execution calls                                   |
-| Create/Edit Step One           | Obtain extraction profiles from a catalog rather than a hard-coded service UUID allowlist                          |
-| Template administration        | If product-required, add localized CRUD/version/archive screens over canonical templates; never direct invoke      |
-| Create/Edit Step Two           | Render generic entry/destination connector descriptors and schemas; remove Google/n8n-specific state               |
-| Create/Edit Step Three         | Summarize connector intent and submit the canonical definition without `payload_version` or mutable `nodes`        |
-| Edit route                     | Treat workflow identifier as an opaque string                                                                      |
-| Workflow table mapper          | Use returned connector display/capability metadata; remove hard-coded node types, Google URLs, and credential keys |
-| Demo page                      | Upload directly to S3 and show execution state/retry                                                               |
-| Connections page               | Rename credential semantics to connections and render provider status/consent                                      |
-| Review request mapping         | Remove returned `client_id` and browser-selected tenant header                                                     |
-| Review approval                | Call an authenticated review-decision endpoint or compatible adapter URL, not an authority-by-header webhook       |
+| Area                                     | Required change                                                                                                               |
+| ---------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `src/lib/api/endpoints.ts` and BFF route | Add a bounded engine prefix/allowlist, forward bearer authentication, and never derive engine tenant scope from `x-client-id` |
+| `features/workflows/api/**`              | Replace legacy workflow hooks with canonical typed-client queries/mutations while retaining TanStack Query ownership          |
+| `src/types/workflow.ts`                  | Replace legacy `payload_version`, mutable `nodes`, numeric/project assumptions, and credential keys at the UI boundary        |
+| Create/Edit name and service section     | Obtain extraction profiles from the engine catalog rather than a hard-coded service UUID allowlist                            |
+| Create/Edit trigger section              | Render generic entry connector descriptors and schema; keep provider-specific components behind adapters                      |
+| Create/Edit output section               | Render destination descriptors/schema and submit the canonical definition                                                     |
+| Workflow table mapper                    | Use returned connector display/capability metadata; remove hard-coded node types, provider URLs, and credential keys          |
+| Demo page                                | Replace base64 `endpoint_url` invocation with upload session, direct S3 transfer, completion, and execution status            |
+| Connections page                         | Rename credential semantics to connections and render provider status/consent                                                 |
+| Execution and review projections         | Map canonical resources into the existing pages without legacy tenant headers or authority-by-header webhooks                 |
+| Template/collection routes               | Keep on their current backend until their explicit Phase 5 migration; do not partially redirect them in Phase 3               |
 
-These changes keep the current routes, Redux organization, page ownership, and overall visual flow.
+These changes keep the current App Router paths, TanStack Query/Zustand
+ownership, feature-module boundaries, page ownership, and overall visual flow.
 
 The exact n8n-free operation, version-replacement, deactivation, polling, and safe-failure behavior is defined in [`workflow-provisioning-v1.md`](workflow-provisioning-v1.md). DevPortal derives its toggle from the engine activation projection rather than keeping an independent `active` boolean.
 
@@ -434,7 +510,7 @@ This inventory does not close Phase 0B. The following items still block later ph
 
 ## Acceptance criteria for this contract slice
 
-- The existing DevPortal journeys and every frontend-called workflow endpoint are listed.
+- The existing `devportal-frontend` journeys and every frontend-called workflow endpoint are listed.
 - Stable user intent is separated from legacy n8n/Google fields.
 - The direct DevPortal-to-engine boundary and required localized UI changes are explicit.
 - Direct upload and SharePoint entry converge on a common staged-document execution path.

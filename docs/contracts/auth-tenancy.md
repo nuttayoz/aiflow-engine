@@ -1,6 +1,6 @@
 # Authentication, tenancy, and project authorization contract
 
-Status: Phase 0B contract draft, 2026-07-14.
+Status: Phase 0B contract, frontend evidence corrected 2026-07-22.
 
 This contract defines how AiFlow Engine authenticates callers, derives actor and tenant context, authorizes project access, and propagates identity safely into asynchronous work. Exact platform claim names and service endpoints remain configuration inputs listed at the end.
 
@@ -8,15 +8,15 @@ This contract defines how AiFlow Engine authenticates callers, derives actor and
 
 Evidence was read from:
 
-- `devportal` at `2fc93d8ba136846f45df3a5d0f2bfa7e6b1cc38f`
-- `devportal-backend` at `c546a2fdedf2fe26719c1effd5ccfe71c068dfe6`
+- `devportal-frontend` at `f1c9a9bad23c357a67fef1ddfaba1a8a4d0fa436`
+- `devportal-backend` at `4b74f99c5370aab7c55ceeb639510abe7a9fbca0`
 
 Confirmed current behavior:
 
-- DevPortal already stores an access token and uses `Authorization: Bearer <token>` for project, user, service, and other protected APIs.
+- DevPortal keeps access and refresh tokens in HTTP-only cookies. Browser code calls a same-origin Next.js BFF, which forwards `Authorization: Bearer <token>` to protected upstream APIs.
 - The current backend is configured as a bearer-only Keycloak client and protects most product routes with the realm role `app-user`.
 - Several protected handlers decode `sub` and use it as `client_id` after the route guard has validated the token.
-- The workflow frontend does not use the normal bearer header. It reads `user.sub` from browser storage and sends it as `x-client-id`.
+- The current workflow hooks and BFF retain legacy `x-client-id` compatibility. The BFF can derive it from the validated token, but browser request code may also inject it while the client state is hydrated.
 - The workflow router imports Keycloak but does not protect its routes.
 - Current project lookup sends the decoded subject to Key Manager as `clientId`; repository evidence does not define organization/tenant membership or a permission-checking contract.
 
@@ -24,7 +24,7 @@ These are migration facts, not the target security design. In particular, `sub` 
 
 ## Fixed decisions
 
-1. Every DevPortal-to-engine request uses the existing platform access token through the API gateway.
+1. Every DevPortal-to-engine request flows through the same-origin BFF and API gateway using the existing platform access token; presigned S3 transfer is the explicit exception.
 2. AiFlow Engine independently validates the token; gateway validation alone is not the engine trust boundary.
 3. `sub` is the actor identifier. Tenant identity is a separate value.
 4. `x-client-id`, tenant headers, tenant body fields, and browser-selected ownership are rejected as authorization inputs.
