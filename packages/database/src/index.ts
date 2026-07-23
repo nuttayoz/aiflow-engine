@@ -10,6 +10,7 @@ export * from './outbox.repository';
 export * from './pipeline.repository';
 export * from './scheduler.repository';
 export * from './sharepoint.repository';
+export * from './sharepoint-provisioning.repository';
 export * from './storage-object.repository';
 export * from './upload-session.repository';
 export * from './workflow.repository';

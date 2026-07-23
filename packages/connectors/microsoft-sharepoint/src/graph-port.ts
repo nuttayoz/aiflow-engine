@@ -32,7 +32,7 @@ export type SharePointGraphItem =
       readonly kind: 'FILE';
       readonly name: string;
       readonly parentId: string;
-      readonly sizeBytes?: number;
+      readonly sizeBytes: number;
     }
   | {
       readonly eTag: string;

@@ -12,6 +12,11 @@ import {
   loadDatabaseRuntimeConfig,
   type DatabaseRuntimeConfig,
 } from '@aiflow/config';
+import {
+  AesGcmSharePointCursorProtector,
+  FakeSharePointGraphAdapter,
+  SharePointManagedEntryProvisioner,
+} from '@aiflow/connector-microsoft-sharepoint';
 import type { ValidatedWorkflowDefinition } from '@aiflow/workflows';
 
 import {
@@ -29,6 +34,7 @@ import {
   PostgresSchedulerLeaseRepository,
 } from './scheduler.repository';
 import { PostgresSharePointRepository } from './sharepoint.repository';
+import { PostgresSharePointProvisioningRepository } from './sharepoint-provisioning.repository';
 import { PostgresStorageObjectRepository } from './storage-object.repository';
 import { PostgresWorkflowProvisioningRepository } from './workflow-provisioning.repository';
 import { PostgresWorkflowRepository } from './workflow.repository';
@@ -1035,6 +1041,212 @@ describe('PostgreSQL foundation', () => {
         tenantId,
       }),
     ).rejects.toThrow('CONNECTION_REFERENCE_CONFLICT');
+  });
+
+  it('provisions one shared SharePoint watch with an encrypted resumable baseline', async () => {
+    const tenantId = `sharepoint-provision-${randomUUID()}`;
+    const projectId = 'sharepoint-project';
+    const connectionId = randomUUID();
+    const workflowId = randomUUID();
+    const workflowVersionId = randomUUID();
+    const operationId = randomUUID();
+    const key = {
+      keyVersion: 1,
+      rootKey: new Uint8Array(32).fill(8),
+    };
+    const target = {
+      connectionId,
+      driveId: 'drive-provision-1',
+      externalTenantId: 'external-tenant-provision-1',
+      folderId: 'folder-provision-1',
+      rootItemId: 'root-provision-1',
+      siteId: 'site-provision-1',
+    };
+
+    const connections = new PostgresConnectionRepository(
+      runtimeDataSource,
+      runtimeConfig.schema,
+    );
+    const workflows = new PostgresWorkflowRepository(
+      runtimeDataSource,
+      runtimeConfig.schema,
+    );
+    await connections.create({
+      actor: { id: 'sharepoint-test', type: 'SYSTEM' },
+      causationId: 'sharepoint-provision-connection',
+      configuration: {},
+      configurationSchemaVersion: 1,
+      connectorId: 'microsoft-sharepoint',
+      correlationId: 'sharepoint-provision-test',
+      displayName: 'SharePoint provision connection',
+      id: connectionId,
+      idempotencyKey: `connection-${connectionId}`,
+      tenantId,
+    });
+    await workflows.create({
+      actor: { id: 'sharepoint-test', type: 'SYSTEM' },
+      causationId: 'sharepoint-provision-workflow',
+      correlationId: 'sharepoint-provision-test',
+      definition: validatedDefinition,
+      name: 'SharePoint provision workflow',
+      projectId,
+      tenantId,
+      versionId: workflowVersionId,
+      workflowId,
+    });
+
+    const graph = new FakeSharePointGraphAdapter(
+      [target],
+      () => new Date('2026-07-23T00:00:00.000Z'),
+    );
+    graph.setDeltaPage(connectionId, target.driveId, undefined, {
+      finalCursor: 'confidential-final-delta-cursor',
+      items: [
+        {
+          eTag: 'folder-etag',
+          id: target.folderId,
+          kind: 'FOLDER',
+          name: 'Inbound',
+          parentId: target.rootItemId,
+        },
+        {
+          cTag: 'file-ctag',
+          eTag: 'file-etag',
+          id: 'baseline-file-1',
+          kind: 'FILE',
+          name: 'baseline.pdf',
+          parentId: target.folderId,
+          sizeBytes: 123,
+        },
+      ],
+    });
+    const cursorProtector = new AesGcmSharePointCursorProtector([key], 1);
+    const repository = new PostgresSharePointProvisioningRepository(
+      runtimeDataSource,
+      runtimeConfig.schema,
+      cursorProtector,
+    );
+    const provisioner = new SharePointManagedEntryProvisioner(
+      repository,
+      graph,
+      [key],
+      1,
+      'http://localhost:3000/provider-callbacks/v1/microsoft-graph/sharepoint',
+      () => new Date('2026-07-23T00:00:00.000Z'),
+    );
+
+    const operations = new PostgresWorkflowProvisioningRepository(
+      runtimeDataSource,
+      runtimeConfig.schema,
+    );
+    await operations.requestActivation({
+      actor: { id: 'sharepoint-test', type: 'SYSTEM' },
+      causationId: 'sharepoint-provision-activate',
+      correlationId: 'sharepoint-provision-test',
+      idempotencyKey: `activate-${operationId}`,
+      operationId,
+      projectId,
+      targetVersionId: workflowVersionId,
+      tenantId,
+      workflowId,
+    });
+    const prepared = await provisioner.prepare({
+      actionId: 'watch-folder',
+      capabilityHash: 'f'.repeat(64),
+      configuration: {
+        driveId: target.driveId,
+        folderId: target.folderId,
+        includeSubfolders: true,
+        siteId: target.siteId,
+      },
+      connectionId,
+      operationId,
+      projectId,
+      tenantId,
+      workflowId,
+      workflowVersionId,
+    });
+    expect(prepared).toMatchObject({ status: 'READY' });
+    if (prepared.status !== 'READY') throw new Error('TEST_SETUP_FAILED');
+    const claimed = await operations.claim({
+      consumerName: 'sharepoint-provision-worker',
+      expectedStateVersion: 0,
+      leaseDurationMs: 30_000,
+      leaseOwner: 'sharepoint-provision-worker',
+      messageId: randomUUID(),
+      messageType: 'aiflow.workflow.provisioning.requested.v1',
+      operationId,
+      projectId,
+      tenantId,
+    });
+    if (claimed === undefined) throw new Error('TEST_SETUP_FAILED');
+    await operations.completeActivation({
+      expectedStateVersion: claimed.stateVersion,
+      leaseOwner: 'sharepoint-provision-worker',
+      managedBindingId: prepared.bindingId,
+      operationId,
+      tenantId,
+    });
+
+    const [state] = (await runtimeDataSource.query(
+      `
+        SELECT
+          binding.status AS binding_status,
+          watch.baseline_status,
+          watch.subscription_status,
+          watch.committed_delta_cursor_ciphertext,
+          workflow.status AS workflow_status,
+          (
+            SELECT count(*)::int
+            FROM aiflow.sharepoint_drive_items AS item
+            WHERE item.tenant_id = watch.tenant_id
+              AND item.watch_id = watch.id
+          ) AS item_count,
+          (
+            SELECT count(*)::int
+            FROM aiflow.document_ingestions AS ingestion
+            WHERE ingestion.tenant_id = watch.tenant_id
+              AND ingestion.watch_id = watch.id
+          ) AS ingestion_count
+        FROM aiflow.connector_provisioning_bindings AS binding
+        JOIN aiflow.sharepoint_binding_scopes AS scope
+          ON scope.tenant_id = binding.tenant_id
+         AND scope.binding_id = binding.id
+        JOIN aiflow.sharepoint_drive_watches AS watch
+          ON watch.tenant_id = scope.tenant_id
+         AND watch.id = scope.watch_id
+        JOIN aiflow.workflows AS workflow
+          ON workflow.tenant_id = binding.tenant_id
+         AND workflow.id = binding.workflow_id
+        WHERE binding.tenant_id = $1
+          AND binding.workflow_version_id = $2
+      `,
+      [tenantId, workflowVersionId],
+    )) as {
+      baseline_status: string;
+      binding_status: string;
+      committed_delta_cursor_ciphertext: Buffer;
+      ingestion_count: number;
+      item_count: number;
+      subscription_status: string;
+      workflow_status: string;
+    }[];
+    expect(state).toMatchObject({
+      baseline_status: 'COMPLETE',
+      binding_status: 'ACTIVE',
+      ingestion_count: 0,
+      item_count: 2,
+      subscription_status: 'ACTIVE',
+      workflow_status: 'ACTIVE',
+    });
+    expect(
+      state?.committed_delta_cursor_ciphertext.includes(
+        Buffer.from('confidential-final-delta-cursor'),
+      ),
+    ).toBe(false);
+    expect(
+      cursorProtector.unprotect(state!.committed_delta_cursor_ciphertext),
+    ).toBe('confidential-final-delta-cursor');
   });
 
   it('deduplicates SharePoint callbacks and coalesces their durable wake-up', async () => {

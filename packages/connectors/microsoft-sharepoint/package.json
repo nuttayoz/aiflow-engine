@@ -8,7 +8,8 @@
     "dist"
   ],
   "dependencies": {
-    "@aiflow/connector-sdk": "workspace:*"
+    "@aiflow/connector-sdk": "workspace:*",
+    "@aiflow/workflows": "workspace:*"
   },
   "devDependencies": {
     "@aiflow/connector-test-suite": "workspace:*"
