@@ -20,6 +20,7 @@ import {
   PostgresSharePointIngestionRecoveryRepository,
   PostgresSharePointRecoveryRepository,
   PostgresUploadSessionRepository,
+  PostgresWorkflowProvisioningRecoveryRepository,
 } from '@aiflow/database';
 import {
   OutboxPublisher,
@@ -80,6 +81,11 @@ export class FoundationSchedulerService
         this.database.dataSource,
         schema,
       );
+    const workflowProvisioningRecovery =
+      new PostgresWorkflowProvisioningRecoveryRepository(
+        this.database.dataSource,
+        schema,
+      );
     this.storage = new S3ObjectStorage(this.s3Config);
 
     this.loops = [
@@ -103,6 +109,7 @@ export class FoundationSchedulerService
         await recovery.recoverExpiredLeases(100, 1_000);
         await recovery.enqueueDueRetries(100);
         await pipeline.enqueueDueDeliveryReconciliations(100);
+        await workflowProvisioningRecovery.recoverExpiredLeases(100);
       }),
       this.runLoop('upload-expiry', 5_000, async () => {
         const lease = await leases.acquire({

@@ -394,13 +394,13 @@ export class PostgresConnectionRepository implements ConnectionRepository {
       await manager.query(
         `
           UPDATE ${this.connections}
-          SET health = $3,
+          SET health = $3::varchar,
               state_version = CASE
-                WHEN health = $3 THEN state_version
+                WHEN health = $3::varchar THEN state_version
                 ELSE state_version + 1
               END,
               updated_at = CASE
-                WHEN health = $3 THEN updated_at
+                WHEN health = $3::varchar THEN updated_at
                 ELSE clock_timestamp()
               END
           WHERE tenant_id = $1 AND id = $2

@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { Readable } from 'node:stream';
 
 import {
@@ -37,7 +38,6 @@ export class FakeSharePointGraphAdapter implements SharePointGraphPort {
     SharePointGraphDeltaPage['items'][number]
   >();
   private readonly subscriptions = new Map<string, StoredSubscription>();
-  private subscriptionSequence = 0;
 
   constructor(
     private readonly targets: readonly (SharePointGraphTarget & {
@@ -123,10 +123,9 @@ export class FakeSharePointGraphAdapter implements SharePointGraphPort {
     if (duplicate !== undefined) {
       throw new SharePointGraphError('GRAPH_CONFLICT');
     }
-    this.subscriptionSequence += 1;
     const subscription: StoredSubscription = {
       ...input,
-      id: `fake-subscription-${this.subscriptionSequence.toString()}`,
+      id: `fake-subscription-${randomUUID()}`,
     };
     this.subscriptions.set(subscription.id, subscription);
     if (this.behavior === 'TIMEOUT_AFTER_CREATE') {

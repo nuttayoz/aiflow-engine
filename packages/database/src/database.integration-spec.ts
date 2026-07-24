@@ -45,7 +45,10 @@ import {
 import { PostgresSharePointIngestionRepository } from './sharepoint-ingestion.repository';
 import { PostgresSharePointSyncRepository } from './sharepoint-sync.repository';
 import { PostgresStorageObjectRepository } from './storage-object.repository';
-import { PostgresWorkflowProvisioningRepository } from './workflow-provisioning.repository';
+import {
+  PostgresWorkflowProvisioningRecoveryRepository,
+  PostgresWorkflowProvisioningRepository,
+} from './workflow-provisioning.repository';
 import { PostgresWorkflowRepository } from './workflow.repository';
 
 class DatabaseContractProbe1784592000001 implements MigrationInterface {
@@ -673,6 +676,105 @@ describe('PostgreSQL foundation', () => {
     });
   });
 
+  it('recovers an expired workflow provisioning lease durably', async () => {
+    const workflows = new PostgresWorkflowRepository(
+      runtimeDataSource,
+      runtimeConfig.schema,
+    );
+    const provisioning = new PostgresWorkflowProvisioningRepository(
+      runtimeDataSource,
+      runtimeConfig.schema,
+    );
+    const recovery = new PostgresWorkflowProvisioningRecoveryRepository(
+      runtimeDataSource,
+      runtimeConfig.schema,
+    );
+    const tenantId = 'tenant-provisioning-recovery';
+    const projectId = 'project-provisioning-recovery';
+    const workflowId = randomUUID();
+    const versionId = randomUUID();
+    const operationId = randomUUID();
+    await workflows.create({
+      actor: { id: 'user-a', type: 'USER' },
+      causationId: 'create-provisioning-recovery-workflow',
+      correlationId: 'provisioning-recovery-correlation',
+      definition: validatedDefinition,
+      name: 'Provisioning recovery workflow',
+      projectId,
+      tenantId,
+      versionId,
+      workflowId,
+    });
+    const requested = await provisioning.requestActivation({
+      actor: { id: 'user-a', type: 'USER' },
+      causationId: 'activate-provisioning-recovery-workflow',
+      correlationId: 'provisioning-recovery-correlation',
+      idempotencyKey: 'activate-provisioning-recovery-workflow',
+      operationId,
+      projectId,
+      targetVersionId: versionId,
+      tenantId,
+      workflowId,
+    });
+    await expect(
+      provisioning.claim({
+        consumerName: 'provisioning-worker',
+        expectedStateVersion: requested.stateVersion,
+        leaseDurationMs: 30_000,
+        leaseOwner: 'crashed-provisioning-worker',
+        messageId: 'crashed-provisioning-worker-message',
+        messageType: 'aiflow.workflow.provisioning.requested.v1',
+        operationId,
+        projectId,
+        tenantId,
+      }),
+    ).resolves.toMatchObject({ status: 'RUNNING' });
+    await runtimeDataSource.query(
+      `
+        UPDATE aiflow.workflow_activation_operations
+        SET lease_expires_at = clock_timestamp() - interval '1 second'
+        WHERE tenant_id = $1 AND id = $2
+      `,
+      [tenantId, operationId],
+    );
+
+    await expect(recovery.recoverExpiredLeases(10)).resolves.toBe(1);
+    await expect(
+      provisioning.findById(tenantId, operationId),
+    ).resolves.toMatchObject({
+      stateVersion: 2,
+      status: 'WAITING_RETRY',
+    });
+    const recoveryRows = (await runtimeDataSource.query(
+      `
+        SELECT
+          operation.failure_category,
+          operation.failure_code,
+          COUNT(outbox.id)::integer AS outbox_count
+        FROM aiflow.workflow_activation_operations AS operation
+        LEFT JOIN aiflow.outbox_messages AS outbox
+          ON outbox.tenant_id = operation.tenant_id
+         AND outbox.aggregate_id = operation.id::text
+         AND outbox.message_type = 'aiflow.workflow.provisioning.requested.v1'
+        WHERE operation.tenant_id = $1
+          AND operation.id = $2
+        GROUP BY operation.failure_category, operation.failure_code
+      `,
+      [tenantId, operationId],
+    )) as {
+      failure_category: string;
+      failure_code: string;
+      outbox_count: number;
+    }[];
+    expect(recoveryRows).toEqual([
+      {
+        failure_category: 'TRANSIENT',
+        failure_code: 'PROVISIONING_LEASE_EXPIRED',
+        outbox_count: 2,
+      },
+    ]);
+  });
+
   it('closes workflow intake immediately and replays deactivation idempotently', async () => {
     const workflows = new PostgresWorkflowRepository(
       runtimeDataSource,
@@ -952,6 +1054,22 @@ describe('PostgreSQL foundation', () => {
     await expect(
       connections.list('different-tenant', 'synthetic'),
     ).resolves.toEqual([]);
+    const healthInput = {
+      actor: createInput.actor,
+      causationId: 'connection-health',
+      connectionId,
+      correlationId: 'connection-correlation',
+      health: 'HEALTHY' as const,
+      tenantId,
+    };
+    await expect(connections.setHealth(healthInput)).resolves.toMatchObject({
+      health: 'HEALTHY',
+      stateVersion: 1,
+    });
+    await expect(connections.setHealth(healthInput)).resolves.toMatchObject({
+      health: 'HEALTHY',
+      stateVersion: 1,
+    });
 
     const updateInput = {
       actor: createInput.actor,
@@ -959,17 +1077,17 @@ describe('PostgreSQL foundation', () => {
       connectionId,
       correlationId: 'connection-correlation',
       displayName: 'Renamed connection',
-      expectedStateVersion: 0,
+      expectedStateVersion: 1,
       idempotencyKey: 'connection-update-once',
       tenantId,
     };
     await expect(connections.update(updateInput)).resolves.toMatchObject({
       displayName: 'Renamed connection',
-      stateVersion: 1,
+      stateVersion: 2,
     });
     await expect(connections.update(updateInput)).resolves.toMatchObject({
       displayName: 'Renamed connection',
-      stateVersion: 1,
+      stateVersion: 2,
     });
     await expect(
       connections.update({
@@ -987,11 +1105,11 @@ describe('PostgreSQL foundation', () => {
       tenantId,
     };
     await expect(connections.revoke(revokeInput)).resolves.toMatchObject({
-      stateVersion: 2,
+      stateVersion: 3,
       status: 'REVOKED',
     });
     await expect(connections.revoke(revokeInput)).resolves.toMatchObject({
-      stateVersion: 2,
+      stateVersion: 3,
       status: 'REVOKED',
     });
     await expect(connections.list(tenantId)).resolves.toEqual([]);

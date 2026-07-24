@@ -1180,3 +1180,99 @@ export class PostgresWorkflowProvisioningRepository implements WorkflowProvision
     );
   }
 }
+
+export class PostgresWorkflowProvisioningRecoveryRepository {
+  private readonly operations: string;
+  private readonly outbox: PostgresOutboxRepository;
+
+  constructor(
+    private readonly dataSource: DataSource,
+    schema: string,
+  ) {
+    this.operations = table(schema, 'workflow_activation_operations');
+    this.outbox = new PostgresOutboxRepository(dataSource, schema);
+  }
+
+  async recoverExpiredLeases(batchSize: number): Promise<number> {
+    if (!Number.isInteger(batchSize) || batchSize < 1 || batchSize > 500) {
+      throw new Error('RECOVERY_BATCH_SIZE_INVALID');
+    }
+    return this.dataSource.transaction(async (manager) => {
+      const rows = (await manager.query(
+        `
+          SELECT
+            id,
+            tenant_id,
+            project_id,
+            correlation_id
+          FROM ${this.operations}
+          WHERE status = 'RUNNING'
+            AND lease_expires_at <= clock_timestamp()
+          ORDER BY lease_expires_at, id
+          LIMIT $1
+          FOR UPDATE SKIP LOCKED
+        `,
+        [batchSize],
+      )) as {
+        correlation_id: string;
+        id: string;
+        project_id: string;
+        tenant_id: string;
+      }[];
+      if (manager.queryRunner === undefined) {
+        throw new Error('DATABASE_TRANSACTION_REQUIRED');
+      }
+      for (const row of rows) {
+        const recovered = mutationRows<{
+          next_attempt_at: Date | string;
+          state_version: number | string;
+        }>(
+          await manager.query(
+            `
+              UPDATE ${this.operations}
+              SET status = 'WAITING_RETRY',
+                  current_step = CASE
+                    WHEN kind = 'DEACTIVATE' THEN 'DEPROVISION'
+                    ELSE 'PROVISION'
+                  END,
+                  state_version = state_version + 1,
+                  next_attempt_at = clock_timestamp() + interval '1 second',
+                  lease_owner = NULL,
+                  lease_expires_at = NULL,
+                  failure_code = 'PROVISIONING_LEASE_EXPIRED',
+                  failure_category = 'TRANSIENT',
+                  updated_at = clock_timestamp()
+              WHERE tenant_id = $1
+                AND id = $2
+                AND status = 'RUNNING'
+              RETURNING state_version, next_attempt_at
+            `,
+            [row.tenant_id, row.id],
+          ),
+        )[0];
+        if (recovered === undefined) continue;
+        const retryAt = new Date(recovered.next_attempt_at);
+        const envelope = createMessageEnvelope({
+          actor: { id: 'workflow-provisioning-scheduler', type: 'SYSTEM' },
+          causationId: row.id,
+          correlationId: row.correlation_id,
+          data: {
+            expectedStateVersion: Number(recovered.state_version),
+            provisioningOperationId: row.id,
+          },
+          occurredAt: retryAt,
+          projectId: row.project_id,
+          tenantId: row.tenant_id,
+          type: 'aiflow.workflow.provisioning.requested.v1',
+        });
+        await this.outbox.append(manager.queryRunner, {
+          aggregateId: row.id,
+          aggregateType: 'PROVISIONING_OPERATION',
+          availableAt: retryAt,
+          envelope,
+        });
+      }
+      return rows.length;
+    });
+  }
+}
