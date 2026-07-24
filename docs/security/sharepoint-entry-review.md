@@ -1,8 +1,8 @@
 # SharePoint Entry Security and Readiness Review
 
-Review status: code and local-boundary review complete. Production release is
-blocked until the open findings below are closed and approved by the security
-and platform owners.
+Review status: Phase 4 application findings are resolved in code and locally
+tested. Production release remains blocked on the external Microsoft,
+Kubernetes, product-policy, load, and approval evidence listed below.
 
 This review is required because Phase 4 adds a public provider callback,
 cryptographic callback/cursor handling, provider downloads, confidential
@@ -34,94 +34,114 @@ document staging, new retention records, and new network trust boundaries.
   cryptographic key material; infrastructure TLS, KMS, IAM, and network
   enforcement remain platform responsibilities.
 
-## Open production findings
+## Finding disposition
 
 ### SP-SEC-01 — real identity and Graph adapter
 
 Severity: release blocker.
 
-The Microsoft Entra app-only identity mode, customer admin-consent journey,
-least-privilege permission profile, token acquisition, Graph HTTP behavior, and
-preauthenticated download-redirect validation have not been implemented or
-proven in a production-equivalent sandbox. Production remains unavailable
-until the exact tenant, audience, permissions, endpoints, redirect allow-list,
-timeouts, and secret/workload-identity storage are approved and contract
-tested.
+Code status: resolved. The engine implements SaaS multi-tenant admin consent,
+tenant-bound client-credentials tokens, bounded Graph HTTP behavior, connection
+resource discovery, throttling, and strict preauthenticated redirect
+validation. Production composition fails closed without real credentials.
+
+External gate: prove the exact application registration and `Files.Read.All`
+permission profile in a sandbox, approve the consent wording, and verify
+platform secret injection/rotation.
 
 ### SP-SEC-02 — orphan object after interrupted commit
 
 Severity: high.
 
-Lease recovery abandons a timed-out reservation and retries with a new
-reservation. A process crash after S3 accepts the provider stream but before
-the database commits the exact object version can leave an unreferenced object.
-The storage key is immutable and cannot start an execution, but automated
-reconciliation/deletion of this unknown-version object is not yet implemented.
-A bounded, auditable cleanup mechanism is required before production.
+Code status: resolved. Lease recovery retains the exact immutable reservation.
+Before downloading again, the retry heads that key and adopts a complete,
+size-matching object; a mismatched object is deleted by exact version before a
+new stream. No object can start an execution until metadata, checksum, source
+version, binding eligibility, document, execution, and outbox commit
+atomically.
+
+External gate: run the worker-kill test against the production S3/KMS policy.
 
 ### SP-SEC-03 — deactivation and shared-watch cleanup
 
 Severity: high.
 
-Workflow deactivation closes the generic workflow activation but does not yet
-fully drain the SharePoint binding, remove the last shared-drive reference,
-confirm subscription deletion, or reconcile version handover. Intake and
-cleanup invariants must be implemented and concurrency-tested before
-production.
+Code status: resolved. Deactivation closes intake first, durably runs managed
+cleanup, drains accepted ingestions, preserves shared subscriptions, deletes
+only the last reference, reconciles ambiguous/absent provider state, and
+completes the workflow operation. Version replacement retires the old managed
+binding before switching.
+
+External gate: repeat shared-watch and handover disruption tests against the
+Microsoft sandbox.
 
 ### SP-SEC-04 — callback ingress and download egress
 
 Severity: high.
 
-Application-level request validation exists, but production ingress body/time
-limits, rate controls, optional Microsoft source filtering, TLS termination,
-and abuse monitoring need platform confirmation. Outbound Graph/token endpoint
-allow-listing and preauthenticated redirect protections against downgrade,
-loopback, link-local, metadata, unexpected ports, DNS rebinding, and excess
-redirects must be enforced and tested by the real adapter and network policy.
+Code status: outbound controls resolved. Graph/token origins are fixed by the
+adapter; redirects are manual, bounded, HTTPS-only, hostname-allow-listed,
+resolved against public addresses, and receive no Graph authorization header.
+The callback has strict content type, query, body, collection, shape,
+correlation, replay, and fast-acknowledgement controls.
+
+External gate: configure and record TLS termination, body/time/rate limits,
+optional Microsoft source filtering, abuse alerts, and pod egress policy at the
+production ingress/network layer.
 
 ### SP-SEC-05 — fairness, throttling, and load evidence
 
 Severity: high.
 
-Sync and ingestion can scale independently and work is serialized per watch,
-but explicit admission limits per provider tenant, engine tenant, connection,
-and app are not yet implemented. Production-equivalent tests must prove
-`Retry-After`, bounded queue growth, hot-tenant isolation, callback bursts,
-large-file memory limits, scheduler recovery, and Kubernetes scaling behavior.
+Code status: resolved for application admission. Sync and streaming ingestion
+have configurable per-engine-tenant and per-connection concurrency limits
+enforced with database advisory locks across pods. Excess work is durably
+rescheduled, Graph `Retry-After` is preserved, and metrics use low-cardinality
+labels. Queue roles remain independently scalable.
+
+External gate: choose deployment-wide/provider-app caps and prove callback
+bursts, large-file memory bounds, hot-tenant isolation, Rabbit/KEDA behavior,
+pod disruption, and alert thresholds in the production-equivalent cluster.
 
 ### SP-SEC-06 — reconciliation completeness
 
 Severity: medium.
 
-The normal delta path, replay, renewal, and scheduled backstop are implemented.
-Cursor invalidation/rebaseline, selected-folder deletion, folder subtree
-move/rename repair, subscription handover, and provider-side absence
-reconciliation require complete behavior and tests before production.
+Code status: resolved. Invalid cursors trigger a new inventory generation and
+metadata-only rebaseline without re-executing unchanged versions. Folder
+moves use bounded, cycle-safe ancestry/subtree repair; missing selected folders
+degrade the binding. Unknown or absent subscriptions are recreated while
+retaining the committed cursor. Local integration tests cover these states.
+
+External gate: exercise the same scenarios against a Microsoft sandbox.
 
 ### SP-SEC-07 — retention and deletion policy
 
 Severity: medium.
 
-The schema supports durable notification, inventory, ingestion, document, and
-audit records, but exact product/privacy retention values and cleanup jobs are
-not approved. No production launch should occur until those values, legal
-holds, deletion ownership, and observable retry/reconciliation behavior are
-documented and implemented.
+Code status: partially resolved. Notification events expire after 30 days and
+the scheduler purges them in bounded, leased batches. Unresolved watches,
+cursors, bindings, ingestions, and engine documents are deliberately retained;
+SharePoint deletion never shortens engine retention.
+
+External gate: product/privacy owners must approve inventory, tombstone,
+document, audit, orphan-watch, and legal-hold values before enabling their
+deletion jobs.
 
 ### SP-SEC-08 — resource discovery and customer safety
 
 Severity: medium.
 
-The current UI accepts stable site, drive, and folder IDs manually. A
-connection-scoped provider browser should return only allow-listed IDs and
-labels accessible to that connection. Raw Graph payloads, tokens, tenant web
-URLs, and secret references must never be exposed to the browser.
+Code status: resolved. DevPortal uses the engine's connection-scoped
+site -> library -> folder browser and receives only bounded opaque IDs, labels,
+resource kinds, and selection hints. Tokens, Graph URLs, raw payloads, tenant
+web URLs, and secret references are not returned.
+
+External gate: complete the signed-in customer acceptance walkthrough.
 
 ## Conclusion
 
-The deterministic local proof is suitable for continued engine and DevPortal
-development. It demonstrates the intended data plane and reliability model,
-not permission to process production SharePoint data. Production stays
-fail-closed until every release blocker is implemented, tested against a real
-Microsoft sandbox, and approved by the required security/platform owners.
+The whole Phase 4 implementation is suitable for local acceptance. It is not
+permission to process production SharePoint data. Production stays fail-closed
+until the Microsoft sandbox, deployment-platform, load, product-policy, and
+security approvals above are recorded.

@@ -80,12 +80,14 @@ processing-artifact references, extraction requests/callback deduplication, and
 effective-once delivery operations. It adds nullable columns to `documents` and
 does not require a table backfill.
 
-The Phase 4 SharePoint migration is also additive and requires no backfill. It
-adds provider-neutral managed-binding and document-ingestion tables plus
-SharePoint-owned drive-watch, folder-scope, item-inventory, and notification
-deduplication tables. Cursor fields are ciphertext-only; the schema has no
-columns for tokens, callback client-state values, download URLs, raw provider
-bodies, or document bytes.
+The Phase 4 SharePoint migrations are also additive and require no data
+backfill. They add provider-neutral managed-binding and document-ingestion
+tables plus SharePoint-owned drive-watch, folder-scope, item-inventory,
+notification-deduplication, and inventory-generation state. A later constraint
+migration admits the explicit degraded-active and managed-cleanup workflow
+states without rewriting rows. Cursor fields are ciphertext-only; the schema
+has no columns for tokens, callback client-state values, download URLs, raw
+provider bodies, or document bytes.
 
 Production rollout order:
 

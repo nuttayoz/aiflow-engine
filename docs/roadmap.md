@@ -11,7 +11,7 @@ This roadmap controls implementation order. A phase starts only after its entry 
 | Phase 1  | Reliable engine foundation         | Code complete |
 | Phase 2  | Direct-upload proof and demo       | Complete      |
 | Phase 3  | Existing DevPortal compatibility   | Complete      |
-| Phase 4  | SharePoint entry                   | Core complete |
+| Phase 4  | SharePoint entry                   | Code complete |
 | Phase 5  | Templates and review               | Not started   |
 | Phase 6  | Migration, cutover, and retirement | Not started   |
 
@@ -19,8 +19,8 @@ Phase 3 is complete and locally proven through the real DevPortal BFF. The
 Phase 4 SharePoint engine path is locally proven through public APIs and real
 runtime roles; its DevPortal integration is implemented and covered by frontend
 tests, with the signed-in browser acceptance journey documented below.
-Production cutover still requires deployment-owned identity, authorization,
-real Microsoft provider adapters, and the release gates listed below.
+Production cutover still requires real Microsoft sandbox evidence and the
+deployment-owned security/platform gates listed below.
 SharePoint destination behavior was not requested and remains a separate future
 connector action.
 
@@ -345,8 +345,9 @@ Purpose: support automatic document entry from Microsoft while converging on the
 
 Contract: [`contracts/sharepoint-entry-v1.md`](contracts/sharepoint-entry-v1.md).
 
-Status: core entry implementation and local engine proof complete; signed-in
-DevPortal acceptance plus production provider/platform validation pending.
+Status: implementation complete and ready for whole-phase local acceptance;
+signed-in DevPortal acceptance plus production provider/platform validation
+pending.
 
 Implemented:
 
@@ -369,28 +370,36 @@ Implemented:
   upload.
 - Lease expiry recovery, notification replay protection, source metadata
   revalidation, and duplicate source-version suppression.
+- A real Entra client-credentials and Microsoft Graph adapter, explicit
+  customer admin-consent boundary, and connection-scoped
+  site -> library -> folder resource browsing.
+- Durable managed deactivation and version handover, shared-watch
+  reference-counted subscription deletion, admitted-work draining, provider
+  absence recovery, cursor reset/rebaseline, selected-folder failure, and
+  bounded subtree move reconciliation.
+- Crash-safe S3 upload adoption using the same immutable reservation, plus
+  per-tenant/per-connection sync and ingestion admission limits, durable Graph
+  throttling delays, low-cardinality connector metrics, and bounded expired
+  notification cleanup.
 - DevPortal connection and workflow-builder support for SharePoint entry, plus
   managed-entry execution status in the existing workflow journey.
 - A deterministic non-production Graph fake and `bun run phase4:smoke` proof.
-  Production composition fails closed without an approved real Graph adapter.
+  Production composition fails closed without real Graph credentials.
 
 Production release gates:
 
-- Implement and sandbox-prove the approved Microsoft Entra app-only identity,
-  customer admin-consent, least-privilege permission, token, Graph HTTP, and
-  download-redirect adapters.
-- Add provider resource discovery so the UI can browse
-  site -> drive/library -> folder instead of requiring IDs.
-- Complete deactivation, shared-watch last-reference cleanup, version handover,
-  cursor reset/rebaseline, and subtree move reconciliation.
-- Reconcile or delete an orphaned S3 object after a crash between provider
-  upload and database commit.
-- Add ingress/egress controls, per-tenant/connection admission fairness, Graph
-  throttling behavior, production metrics/alerts, and the agreed retention
-  jobs.
-- Pass production-equivalent consent, callback burst, missed-event, large-file,
-  crash, tenant-fairness, and Graph throttling tests.
-- Close the findings in
+- Sandbox-prove the implemented SaaS multi-tenant Entra app, customer
+  admin-consent UX, accepted `Files.Read.All` permission profile, resource
+  discovery, subscription lifecycle, delta, and content download.
+- Apply and verify Kubernetes ingress limits, TLS, network policies, secret
+  injection, worker-role resource limits/autoscaling, production metrics, and
+  alerts.
+- Approve product limits, national-cloud scope, file policy, callback SLO,
+  recovery deadlines, and retention/legal-hold values.
+- Pass the documented signed-in DevPortal walkthrough and
+  production-equivalent callback burst, large-file, hot-tenant, Graph
+  throttling, and disruption tests in the target environment.
+- Obtain security/platform approval for the remaining external findings in
   [`security/sharepoint-entry-review.md`](security/sharepoint-entry-review.md).
 
 Deferred:
@@ -405,8 +414,8 @@ Exit criteria:
   survives notification/delta replay without a duplicate execution.
 - DevPortal: implementation and automated frontend tests complete; the signed-in
   manual acceptance walkthrough remains for the product owner.
-- Production: pending until every production release gate above is demonstrated
-  against a real Microsoft sandbox and the deployment platform.
+- Production: pending on external validation and approval; no missing
+  application implementation is hidden by the local fake.
 
 Verification:
 

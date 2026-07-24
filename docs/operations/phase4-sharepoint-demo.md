@@ -16,8 +16,9 @@ bun run phase4:smoke
 The smoke command builds the repository, starts temporary API, worker, and
 scheduler roles, creates a SharePoint-entry workflow through the public API,
 and waits for the seeded post-baseline document to complete. It also proves the
-Graph validation challenge and verifies that delta replay does not create a
-second execution.
+Graph validation challenge, verifies that delta replay does not create a
+second execution, and waits for managed deactivation to confirm last-reference
+subscription cleanup.
 
 Expected output includes:
 
@@ -28,6 +29,7 @@ MAP: SUCCEEDED
 REVIEW: SKIPPED
 DELIVER: SUCCEEDED
 status: SUCCEEDED
+deactivation: SUCCEEDED
 ```
 
 Do not run another local worker against the same RabbitMQ virtual host while the
@@ -63,8 +65,25 @@ flow, and use project `demo-project-a`.
    destination, then activate the workflow.
 6. Open the workflow entry/status page. One `sharepoint-demo.pdf` execution
    appears after the metadata baseline and completes through the normal stages.
+7. Deactivate the workflow. The UI waits for managed cleanup; after completion
+   the workflow is inactive, accepts no new documents, and has no pending
+   cleanup.
 
 Each fresh local watch receives one deterministic document after its baseline.
 The fake Graph and fake destination adapters are non-production composition
 only. Production startup does not silently substitute them for real Microsoft
 adapters.
+
+## Real Microsoft acceptance
+
+Use a dedicated sandbox tenant and an HTTPS callback reachable by Microsoft.
+Configure `SHAREPOINT_GRAPH_MODE=MICROSOFT_GRAPH`, inject the registered
+multi-tenant application's client ID and secret through the platform secret
+mechanism, set the exact callback URL and approved DevPortal consent origin,
+and explicitly grant the documented `Files.Read.All` application permission.
+
+Run the same DevPortal journey with the resource browser. Confirm site,
+library, and folder listing; activation; subscription create/renew/delete;
+post-baseline file ingestion; cursor recovery; and deactivation. Do not approve
+production until Kubernetes ingress, egress, secret, resource, autoscaling,
+metrics, alert, and disruption checks from the security review are recorded.
