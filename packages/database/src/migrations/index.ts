@@ -6,6 +6,7 @@ import { UploadSessionParts1784678400000 } from './1784678400000-upload-session-
 import { Phase2Pipeline1784764800000 } from './1784764800000-phase2-pipeline';
 import { SharePointEntry1784851200000 } from './1784851200000-sharepoint-entry';
 import { SharePointHardening1784937600000 } from './1784937600000-sharepoint-hardening';
+import { ManagedWorkflowStates1785024000000 } from './1785024000000-managed-workflow-states';
 
 export const ENGINE_MIGRATIONS: NonNullable<
   PostgresDataSourceOptions['migrations']
@@ -16,4 +17,5 @@ export const ENGINE_MIGRATIONS: NonNullable<
   Phase2Pipeline1784764800000,
   SharePointEntry1784851200000,
   SharePointHardening1784937600000,
+  ManagedWorkflowStates1785024000000,
 ];

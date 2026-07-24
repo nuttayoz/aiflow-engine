@@ -1601,6 +1601,164 @@ describe('PostgreSQL foundation', () => {
       sync_command_pending: true,
       sync_outbox_count: 1,
     });
+
+    graph.setBehavior('CURSOR_INVALID');
+    await expect(
+      sync.process({
+        consumerName: 'sharepoint-sync-worker',
+        leaseDurationMs: 30_000,
+        leaseOwner: 'sharepoint-sync-worker',
+        messageId: randomUUID(),
+        messageType:
+          'aiflow.connector.microsoft-sharepoint.watch.reconcile.requested.v1',
+        projectId,
+        tenantId,
+        watchId: watchIdentity!.id,
+      }),
+    ).resolves.toBe('DEFERRED');
+    const [reset] = (await runtimeDataSource.query(
+      `
+        SELECT
+          baseline_status,
+          committed_delta_cursor_ciphertext,
+          inventory_generation
+        FROM aiflow.sharepoint_drive_watches
+        WHERE tenant_id = $1 AND id = $2
+      `,
+      [tenantId, watchIdentity!.id],
+    )) as {
+      baseline_status: string;
+      committed_delta_cursor_ciphertext: Buffer | null;
+      inventory_generation: number | string;
+    }[];
+    expect(reset).toEqual({
+      baseline_status: 'RECONCILING',
+      committed_delta_cursor_ciphertext: null,
+      inventory_generation: '2',
+    });
+
+    graph.setBehavior('NORMAL');
+    graph.setDeltaPage(connectionId, target.driveId, undefined, {
+      finalCursor: 'rebaseline-cursor',
+      items: [
+        {
+          eTag: 'folder-etag',
+          id: target.folderId,
+          kind: 'FOLDER',
+          name: 'Inbound',
+          parentId: target.rootItemId,
+        },
+        {
+          cTag: 'file-ctag',
+          eTag: 'file-etag',
+          id: 'baseline-file-1',
+          kind: 'FILE',
+          name: 'baseline.pdf',
+          parentId: target.folderId,
+          sizeBytes: 123,
+        },
+        {
+          cTag: 'new-file-ctag',
+          contentType: 'application/pdf',
+          eTag: 'new-file-etag',
+          id: 'new-file-1',
+          kind: 'FILE',
+          name: 'new-invoice.pdf',
+          parentId: target.folderId,
+          sizeBytes: 456,
+        },
+      ],
+    });
+    await expect(
+      sync.process({
+        consumerName: 'sharepoint-sync-worker',
+        leaseDurationMs: 30_000,
+        leaseOwner: 'sharepoint-sync-worker',
+        messageId: randomUUID(),
+        messageType:
+          'aiflow.connector.microsoft-sharepoint.watch.reconcile.requested.v1',
+        projectId,
+        tenantId,
+        watchId: watchIdentity!.id,
+      }),
+    ).resolves.toBe('PROCESSED');
+    const [rebaselined] = (await runtimeDataSource.query(
+      `
+        SELECT
+          baseline_status,
+          committed_delta_cursor_ciphertext,
+          (
+            SELECT count(*)::int
+            FROM aiflow.document_ingestions AS ingestion
+            WHERE ingestion.tenant_id = watch.tenant_id
+              AND ingestion.watch_id = watch.id
+          ) AS ingestion_count
+        FROM aiflow.sharepoint_drive_watches AS watch
+        WHERE tenant_id = $1 AND id = $2
+      `,
+      [tenantId, watchIdentity!.id],
+    )) as {
+      baseline_status: string;
+      committed_delta_cursor_ciphertext: Buffer;
+      ingestion_count: number;
+    }[];
+    expect(rebaselined?.baseline_status).toBe('COMPLETE');
+    expect(rebaselined?.ingestion_count).toBe(2);
+    expect(
+      cursorProtector.unprotect(rebaselined!.committed_delta_cursor_ciphertext),
+    ).toBe('rebaseline-cursor');
+
+    graph.setDeltaPage(connectionId, target.driveId, 'rebaseline-cursor', {
+      finalCursor: 'after-folder-delete',
+      items: [{ id: target.folderId, kind: 'DELETED' }],
+    });
+    await runtimeDataSource.query(
+      `
+        UPDATE aiflow.sharepoint_drive_watches
+        SET sync_command_pending = true
+        WHERE tenant_id = $1 AND id = $2
+      `,
+      [tenantId, watchIdentity!.id],
+    );
+    await expect(
+      sync.process({
+        consumerName: 'sharepoint-sync-worker',
+        leaseDurationMs: 30_000,
+        leaseOwner: 'sharepoint-sync-worker',
+        messageId: randomUUID(),
+        messageType:
+          'aiflow.connector.microsoft-sharepoint.watch.reconcile.requested.v1',
+        projectId,
+        tenantId,
+        watchId: watchIdentity!.id,
+      }),
+    ).resolves.toBe('PROCESSED');
+    const [degraded] = (await runtimeDataSource.query(
+      `
+        SELECT
+          binding.failure_code,
+          binding.status AS binding_status,
+          workflow.accepting_new_documents,
+          workflow.health AS workflow_health
+        FROM aiflow.connector_provisioning_bindings AS binding
+        JOIN aiflow.workflows AS workflow
+          ON workflow.tenant_id = binding.tenant_id
+         AND workflow.id = binding.workflow_id
+        WHERE binding.tenant_id = $1 AND binding.id = $2
+      `,
+      [tenantId, prepared.bindingId],
+    )) as {
+      accepting_new_documents: boolean;
+      binding_status: string;
+      failure_code: string;
+      workflow_health: string;
+    }[];
+    expect(degraded).toEqual({
+      accepting_new_documents: false,
+      binding_status: 'FAILED',
+      failure_code: 'SHAREPOINT_SELECTED_FOLDER_UNAVAILABLE',
+      workflow_health: 'DEGRADED',
+    });
   });
 
   it('deduplicates SharePoint callbacks and coalesces their durable wake-up', async () => {
@@ -1807,6 +1965,28 @@ describe('PostgreSQL foundation', () => {
       outbox_count: 1,
       sync_command_pending: true,
     });
+    await runtimeDataSource.query(
+      `
+        UPDATE aiflow.sharepoint_notification_events
+        SET expires_at = clock_timestamp() - interval '1 second'
+        WHERE tenant_id = $1 AND watch_id = $2 AND event_key_hash = $3
+      `,
+      [tenantId, watchId, notification.eventKeyHash],
+    );
+    const recovery = new PostgresSharePointRecoveryRepository(
+      runtimeDataSource,
+      runtimeConfig.schema,
+    );
+    await expect(recovery.purgeExpiredNotificationEvents(100)).resolves.toBe(1);
+    const [retained] = (await runtimeDataSource.query(
+      `
+        SELECT count(*)::int AS count
+        FROM aiflow.sharepoint_notification_events
+        WHERE tenant_id = $1 AND watch_id = $2
+      `,
+      [tenantId, watchId],
+    )) as { count: number }[];
+    expect(retained?.count).toBe(1);
   });
 
   it('enforces tenant ownership in composite foreign keys', async () => {
