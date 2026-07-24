@@ -52,14 +52,15 @@ flow, and use project `demo-project-a`.
 1. Create a Microsoft Business Central connection for the destination.
 2. Create a Microsoft SharePoint connection for the entry.
 3. Create a workflow and select the SharePoint folder entry.
-4. Enter these deterministic local provider IDs:
+4. Use the resource browser to select the deterministic local site, library,
+   and folder. The labels and backing IDs are:
 
-   | Field     | Local value               |
-   | --------- | ------------------------- |
-   | Site      | `demo-sharepoint-site`    |
-   | Drive     | `demo-sharepoint-drive`   |
-   | Folder    | `demo-sharepoint-inbound` |
-   | Recursive | enabled                   |
+   | Field     | Local label          | Backing ID                  |
+   | --------- | -------------------- | --------------------------- |
+   | Site      | Demo SharePoint site | `demo-sharepoint-site`      |
+   | Library   | Documents            | `demo-sharepoint-drive`     |
+   | Folder    | Inbound              | `demo-sharepoint-inbound`   |
+   | Recursive | enabled              | includes nested directories |
 
 5. Configure the existing invoice extraction/mapping and Business Central
    destination, then activate the workflow.
