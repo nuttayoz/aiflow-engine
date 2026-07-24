@@ -134,7 +134,8 @@ const parseDeactivationResult = (
     !('cleanupRequired' in parsed) ||
     typeof parsed.cleanupRequired !== 'boolean' ||
     !('health' in parsed) ||
-    !['DEGRADED', 'HEALTHY', 'UNKNOWN'].includes(String(parsed.health))
+    !['DEGRADED', 'HEALTHY', 'UNKNOWN'].includes(String(parsed.health)) ||
+    ('operationId' in parsed && typeof parsed.operationId !== 'string')
   ) {
     throw new Error('WORKFLOW_DEACTIVATION_IDEMPOTENCY_INCONSISTENT');
   }
@@ -410,11 +411,121 @@ export class PostgresWorkflowProvisioningRepository implements WorkflowProvision
         throw new Error('WORKFLOW_DEACTIVATION_CLEANUP_UNAVAILABLE');
       }
 
+      const bindings =
+        workflow.active_version_id === null
+          ? []
+          : ((await manager.query(
+              `
+                SELECT id
+                FROM ${this.bindings}
+                WHERE tenant_id = $1
+                  AND project_id = $2
+                  AND workflow_id = $3
+                  AND workflow_version_id = $4
+                  AND status IN ('ACTIVE', 'DRAINING')
+                FOR UPDATE
+              `,
+              [
+                input.tenantId,
+                input.projectId,
+                input.workflowId,
+                workflow.active_version_id,
+              ],
+            )) as { id: string }[]);
+      const managedCleanup = bindings.length > 0;
       const changed =
         workflow.status === 'ACTIVE' ||
         workflow.active_version_id !== null ||
         workflow.accepting_new_documents;
-      if (changed) {
+
+      if (managedCleanup) {
+        await manager.query(
+          `
+            UPDATE ${this.bindings}
+            SET status = 'DRAINING',
+                accepting_new_documents = false,
+                drain_deadline_at = clock_timestamp() + interval '15 minutes',
+                state_version = state_version + 1,
+                updated_at = clock_timestamp()
+            WHERE tenant_id = $1
+              AND project_id = $2
+              AND workflow_id = $3
+              AND workflow_version_id = $4
+              AND status IN ('ACTIVE', 'DRAINING')
+          `,
+          [
+            input.tenantId,
+            input.projectId,
+            input.workflowId,
+            workflow.active_version_id,
+          ],
+        );
+        await manager.query(
+          `
+            UPDATE ${this.workflows}
+            SET accepting_new_documents = false,
+                cleanup_required = true,
+                health = 'UNKNOWN',
+                status = 'INACTIVE',
+                state_version = state_version + 1,
+                updated_at = clock_timestamp()
+            WHERE tenant_id = $1 AND project_id = $2 AND id = $3
+          `,
+          [input.tenantId, input.projectId, input.workflowId],
+        );
+        await manager.query(
+          `
+            INSERT INTO ${this.operations} (
+              id,
+              tenant_id,
+              project_id,
+              workflow_id,
+              previous_version_id,
+              kind,
+              status,
+              current_step,
+              actor_type,
+              actor_id,
+              correlation_id,
+              causation_id
+            ) VALUES (
+              $1, $2, $3, $4, $5, 'DEACTIVATE', 'PENDING', 'DEPROVISION',
+              $6, $7, $8, $9
+            )
+          `,
+          [
+            input.operationId,
+            input.tenantId,
+            input.projectId,
+            input.workflowId,
+            workflow.active_version_id,
+            input.actor.type,
+            input.actor.id,
+            input.correlationId,
+            input.causationId,
+          ],
+        );
+        const message = createMessageEnvelope({
+          actor: input.actor,
+          causationId: input.causationId,
+          correlationId: input.correlationId,
+          data: {
+            expectedStateVersion: 0,
+            provisioningOperationId: input.operationId,
+          },
+          projectId: input.projectId,
+          tenantId: input.tenantId,
+          type: 'aiflow.workflow.provisioning.requested.v1',
+        });
+        if (manager.queryRunner === undefined) {
+          throw new Error('DATABASE_TRANSACTION_REQUIRED');
+        }
+        await this.outbox.append(manager.queryRunner, {
+          aggregateId: input.operationId,
+          aggregateType: 'PROVISIONING_OPERATION',
+          envelope: message,
+        });
+      } else if (changed) {
         await manager.query(
           `
             UPDATE ${this.workflows}
@@ -433,8 +544,12 @@ export class PostgresWorkflowProvisioningRepository implements WorkflowProvision
 
       const result: WorkflowDeactivationResult = {
         acceptingNewDocuments: false,
-        cleanupRequired: false,
+        ...(!managedCleanup || workflow.active_version_id === null
+          ? {}
+          : { activeVersionId: workflow.active_version_id }),
+        cleanupRequired: managedCleanup,
         health: changed ? 'UNKNOWN' : workflow.health,
+        ...(managedCleanup ? { operationId: input.operationId } : {}),
         workflowId: input.workflowId,
       };
       const inserted = (await manager.query(
@@ -510,7 +625,9 @@ export class PostgresWorkflowProvisioningRepository implements WorkflowProvision
           input.actor.type,
           input.actor.id,
           changed
-            ? 'workflow.deactivation.complete'
+            ? managedCleanup
+              ? 'workflow.deactivation.request'
+              : 'workflow.deactivation.complete'
             : 'workflow.deactivation.noop',
           input.workflowId,
           input.correlationId,
@@ -676,6 +793,27 @@ export class PostgresWorkflowProvisioningRepository implements WorkflowProvision
         if (bindings.length !== 1) {
           throw new Error('MANAGED_CONNECTOR_BINDING_NOT_READY');
         }
+        await manager.query(
+          `
+            UPDATE ${this.bindings}
+            SET status = 'DRAINING',
+                accepting_new_documents = false,
+                drain_deadline_at = clock_timestamp() + interval '15 minutes',
+                state_version = state_version + 1,
+                updated_at = clock_timestamp()
+            WHERE tenant_id = $1
+              AND project_id = $2
+              AND workflow_id = $3
+              AND workflow_version_id <> $4
+              AND status = 'ACTIVE'
+          `,
+          [
+            operation.tenant_id,
+            operation.project_id,
+            operation.workflow_id,
+            operation.target_version_id,
+          ],
+        );
       }
 
       const workflows = mutationRows<{ id: string }>(
@@ -757,6 +895,121 @@ export class PostgresWorkflowProvisioningRepository implements WorkflowProvision
     return operation;
   }
 
+  async completeDeactivation(input: {
+    readonly expectedStateVersion: number;
+    readonly leaseOwner: string;
+    readonly operationId: string;
+    readonly tenantId: string;
+  }): Promise<ProvisioningOperationRecord> {
+    await this.dataSource.transaction(async (manager) => {
+      const rows = (await manager.query(
+        `
+          SELECT ${operationColumns}
+          FROM ${this.operations}
+          WHERE tenant_id = $1
+            AND id = $2
+            AND state_version = $3
+            AND kind = 'DEACTIVATE'
+            AND status = 'RUNNING'
+            AND lease_owner = $4
+            AND lease_expires_at > clock_timestamp()
+          FOR UPDATE
+        `,
+        [
+          input.tenantId,
+          input.operationId,
+          input.expectedStateVersion,
+          input.leaseOwner,
+        ],
+      )) as OperationRow[];
+      const operation = rows[0];
+      if (operation === undefined) {
+        throw new Error('PROVISIONING_LEASE_LOST');
+      }
+
+      const workflows = mutationRows<{ id: string }>(
+        await manager.query(
+          `
+            UPDATE ${this.workflows}
+            SET active_version_id = NULL,
+                accepting_new_documents = false,
+                cleanup_required = false,
+                status = 'INACTIVE',
+                health = 'UNKNOWN',
+                state_version = state_version + 1,
+                updated_at = clock_timestamp()
+            WHERE tenant_id = $1
+              AND project_id = $2
+              AND id = $3
+            RETURNING id
+          `,
+          [operation.tenant_id, operation.project_id, operation.workflow_id],
+        ),
+      );
+      if (workflows.length !== 1) {
+        throw new Error('WORKFLOW_DEACTIVATION_CONFLICT');
+      }
+      const completed = mutationRows<{ id: string }>(
+        await manager.query(
+          `
+            UPDATE ${this.operations}
+            SET status = 'SUCCEEDED',
+                current_step = 'DEPROVISION',
+                state_version = state_version + 1,
+                lease_owner = NULL,
+                lease_expires_at = NULL,
+                completed_at = clock_timestamp(),
+                updated_at = clock_timestamp()
+            WHERE tenant_id = $1 AND id = $2 AND state_version = $3
+            RETURNING id
+          `,
+          [input.tenantId, input.operationId, input.expectedStateVersion],
+        ),
+      );
+      if (completed.length !== 1) {
+        throw new Error('PROVISIONING_LEASE_LOST');
+      }
+      await manager.query(
+        `
+          INSERT INTO ${this.auditEvents} (
+            id,
+            tenant_id,
+            project_id,
+            actor_type,
+            actor_id,
+            action,
+            resource_type,
+            resource_id,
+            outcome,
+            correlation_id,
+            causation_id,
+            workflow_version_id
+          ) VALUES (
+            $1, $2, $3, $4, $5, 'workflow.deactivation.complete',
+            'WORKFLOW', $6, 'SUCCEEDED', $7, $8, $9
+          )
+        `,
+        [
+          randomUUID(),
+          operation.tenant_id,
+          operation.project_id,
+          operation.actor_type,
+          operation.actor_id,
+          operation.workflow_id,
+          operation.correlation_id,
+          operation.causation_id,
+          operation.previous_version_id,
+        ],
+      );
+    });
+
+    const operation = await this.findById(input.tenantId, input.operationId);
+    if (operation === undefined) {
+      throw new Error('PROVISIONING_OPERATION_INCONSISTENT');
+    }
+    return operation;
+  }
+
   async deferActivation(input: {
     readonly expectedStateVersion: number;
     readonly leaseOwner: string;
@@ -764,6 +1017,29 @@ export class PostgresWorkflowProvisioningRepository implements WorkflowProvision
     readonly operationId: string;
     readonly tenantId: string;
   }): Promise<ProvisioningOperationRecord> {
+    return this.deferOperation(input, 'PROVISION');
+  }
+
+  async deferDeactivation(input: {
+    readonly expectedStateVersion: number;
+    readonly leaseOwner: string;
+    readonly nextAttemptAt: Date;
+    readonly operationId: string;
+    readonly tenantId: string;
+  }): Promise<ProvisioningOperationRecord> {
+    return this.deferOperation(input, 'DEPROVISION');
+  }
+
+  private async deferOperation(
+    input: {
+      readonly expectedStateVersion: number;
+      readonly leaseOwner: string;
+      readonly nextAttemptAt: Date;
+      readonly operationId: string;
+      readonly tenantId: string;
+    },
+    currentStep: 'DEPROVISION' | 'PROVISION',
+  ): Promise<ProvisioningOperationRecord> {
     if (
       !Number.isFinite(input.nextAttemptAt.getTime()) ||
       input.nextAttemptAt.getTime() <= Date.now() ||
@@ -777,7 +1053,7 @@ export class PostgresWorkflowProvisioningRepository implements WorkflowProvision
           `
             UPDATE ${this.operations}
             SET status = 'WAITING_RETRY',
-                current_step = 'PROVISION',
+                current_step = $6,
                 state_version = state_version + 1,
                 next_attempt_at = $5,
                 lease_owner = NULL,
@@ -797,6 +1073,7 @@ export class PostgresWorkflowProvisioningRepository implements WorkflowProvision
             input.expectedStateVersion,
             input.leaseOwner,
             input.nextAttemptAt,
+            currentStep,
           ],
         ),
       );

@@ -339,6 +339,7 @@ describe('PostgreSQL foundation', () => {
         causationId: 'deactivate-during-activation',
         correlationId: 'correlation-a',
         idempotencyKey: 'deactivate-during-activation',
+        operationId: randomUUID(),
         projectId,
         tenantId,
         workflowId,
@@ -746,6 +747,7 @@ describe('PostgreSQL foundation', () => {
       causationId: 'deactivate-workflow',
       correlationId: 'deactivation-correlation',
       idempotencyKey: 'deactivate-workflow-once',
+      operationId: randomUUID(),
       projectId,
       tenantId,
       workflowId,
@@ -774,6 +776,7 @@ describe('PostgreSQL foundation', () => {
         ...deactivationInput,
         causationId: 'deactivate-workflow-again',
         idempotencyKey: 'deactivate-workflow-again',
+        operationId: randomUUID(),
       }),
     ).resolves.toEqual(deactivated);
 
@@ -1361,6 +1364,7 @@ describe('PostgreSQL foundation', () => {
     )) as { id: string; state_version: number | string }[];
     const objectStorage = {
       deleteExactVersion: jest.fn(),
+      headCurrentVersion: jest.fn().mockResolvedValue(undefined),
       putImmutableStreaming: jest
         .fn()
         .mockImplementation(
@@ -1559,8 +1563,8 @@ describe('PostgreSQL foundation', () => {
       failure_code: 'SHAREPOINT_INGESTION_LEASE_EXPIRED',
       ingestion_status: 'WAITING_RETRY',
       retry_outbox_count: 1,
-      storage_object_id: null,
-      storage_status: 'ABANDONED',
+      storage_object_id: recoveryStorageObjectId,
+      storage_status: 'RESERVED',
     });
 
     await runtimeDataSource.query(

@@ -5,6 +5,10 @@ import {
   type SharePointGraphPort,
   type SharePointGraphSubscription,
 } from './graph-port';
+import {
+  deriveSharePointClientState,
+  type SharePointClientStateKey,
+} from './client-state';
 
 const RENEWAL_LEAD_TIME_MS = 7 * 24 * 60 * 60 * 1_000;
 const RETRY_DELAY_MS = 5_000;
@@ -12,14 +16,18 @@ const SUBSCRIPTION_LIFETIME_MINUTES =
   SHAREPOINT_SUBSCRIPTION_MAX_LIFETIME_MINUTES - 5;
 
 export interface SharePointSyncClaim {
+  readonly clientStateKeyVersion: number;
   readonly connectionId: string;
-  readonly cursor: string;
+  readonly cursor?: string;
   readonly driveId: string;
+  readonly inventoryGeneration: number;
+  readonly mode: 'DELTA' | 'REBASELINE';
   readonly notificationGeneration: number;
   readonly projectId: string;
   readonly resource: string;
-  readonly subscriptionExpiresAt: Date;
-  readonly subscriptionId: string;
+  readonly subscriptionExpiresAt?: Date;
+  readonly subscriptionId?: string;
+  readonly subscriptionStatus: 'ABSENT' | 'ACTIVE' | 'UNKNOWN';
   readonly tenantId: string;
   readonly watchId: string;
 }
@@ -49,7 +57,18 @@ export interface SharePointSyncRepository {
     readonly tenantId: string;
     readonly watchId: string;
   }): Promise<void>;
+  resetCursor(input: {
+    readonly leaseOwner: string;
+    readonly tenantId: string;
+    readonly watchId: string;
+  }): Promise<void>;
   saveRenewedSubscription(input: {
+    readonly leaseOwner: string;
+    readonly subscription: SharePointGraphSubscription;
+    readonly tenantId: string;
+    readonly watchId: string;
+  }): Promise<void>;
+  saveReconciledSubscription(input: {
     readonly leaseOwner: string;
     readonly subscription: SharePointGraphSubscription;
     readonly tenantId: string;
@@ -71,11 +90,21 @@ const keepLastItemOccurrence = (
 };
 
 export class SharePointSyncProcessor {
+  private readonly keys: ReadonlyMap<number, SharePointClientStateKey>;
+
   constructor(
     private readonly repository: SharePointSyncRepository,
     private readonly graph: SharePointGraphPort,
     private readonly clock: () => Date = () => new Date(),
-  ) {}
+    private readonly subscriptionConfiguration?: {
+      readonly callbackUrl: string;
+      readonly keys: readonly SharePointClientStateKey[];
+    },
+  ) {
+    this.keys = new Map(
+      subscriptionConfiguration?.keys.map((key) => [key.keyVersion, key]) ?? [],
+    );
+  }
 
   async process(input: {
     readonly consumerName: string;
@@ -90,28 +119,69 @@ export class SharePointSyncProcessor {
     const claim = await this.repository.claim(input);
     if (claim === undefined) return 'STALE';
     try {
+      let subscriptionExpiresAt = claim.subscriptionExpiresAt;
+      let subscriptionId = claim.subscriptionId;
       if (
-        claim.subscriptionExpiresAt.getTime() - this.clock().getTime() <=
-        RENEWAL_LEAD_TIME_MS
+        claim.subscriptionStatus !== 'ACTIVE' ||
+        subscriptionExpiresAt === undefined ||
+        subscriptionId === undefined
       ) {
-        const subscription = await this.graph.renewSubscription({
-          connectionId: claim.connectionId,
-          expiresAt: new Date(
-            this.clock().getTime() + SUBSCRIPTION_LIFETIME_MINUTES * 60 * 1_000,
-          ),
-          subscriptionId: claim.subscriptionId,
-          tenantId: claim.tenantId,
-        });
-        await this.repository.saveRenewedSubscription({
+        const current =
+          subscriptionId === undefined
+            ? undefined
+            : await this.graph.getSubscription({
+                connectionId: claim.connectionId,
+                subscriptionId,
+                tenantId: claim.tenantId,
+              });
+        const subscription = current ?? (await this.createSubscription(claim));
+        await this.repository.saveReconciledSubscription({
           leaseOwner: input.leaseOwner,
           subscription,
           tenantId: claim.tenantId,
           watchId: claim.watchId,
         });
+        subscriptionExpiresAt = subscription.expiresAt;
+        subscriptionId = subscription.id;
+      }
+      if (
+        subscriptionExpiresAt !== undefined &&
+        subscriptionId !== undefined &&
+        subscriptionExpiresAt.getTime() - this.clock().getTime() <=
+          RENEWAL_LEAD_TIME_MS
+      ) {
+        try {
+          const subscription = await this.graph.renewSubscription({
+            connectionId: claim.connectionId,
+            expiresAt: this.desiredExpiry(),
+            subscriptionId,
+            tenantId: claim.tenantId,
+          });
+          await this.repository.saveRenewedSubscription({
+            leaseOwner: input.leaseOwner,
+            subscription,
+            tenantId: claim.tenantId,
+            watchId: claim.watchId,
+          });
+        } catch (error) {
+          if (
+            !(error instanceof SharePointGraphError) ||
+            error.code !== 'GRAPH_NOT_FOUND'
+          ) {
+            throw error;
+          }
+          const subscription = await this.createSubscription(claim);
+          await this.repository.saveReconciledSubscription({
+            leaseOwner: input.leaseOwner,
+            subscription,
+            tenantId: claim.tenantId,
+            watchId: claim.watchId,
+          });
+        }
       }
       const page = await this.graph.listDeltaPage({
         connectionId: claim.connectionId,
-        cursor: claim.cursor,
+        ...(claim.cursor === undefined ? {} : { cursor: claim.cursor }),
         driveId: claim.driveId,
         tenantId: claim.tenantId,
       });
@@ -131,6 +201,17 @@ export class SharePointSyncProcessor {
     } catch (error) {
       if (
         error instanceof SharePointGraphError &&
+        error.code === 'GRAPH_CURSOR_INVALID'
+      ) {
+        await this.repository.resetCursor({
+          leaseOwner: input.leaseOwner,
+          tenantId: claim.tenantId,
+          watchId: claim.watchId,
+        });
+        return 'DEFERRED';
+      }
+      if (
+        error instanceof SharePointGraphError &&
         [
           'GRAPH_OUTCOME_UNKNOWN',
           'GRAPH_THROTTLED',
@@ -148,5 +229,58 @@ export class SharePointSyncProcessor {
       }
       throw error;
     }
+  }
+
+  private async createSubscription(
+    claim: SharePointSyncClaim,
+  ): Promise<SharePointGraphSubscription> {
+    const key = this.keys.get(claim.clientStateKeyVersion);
+    const callbackUrl = this.subscriptionConfiguration?.callbackUrl;
+    if (key === undefined || callbackUrl === undefined) {
+      throw new Error('SHAREPOINT_SUBSCRIPTION_RECOVERY_NOT_CONFIGURED');
+    }
+    const clientState = deriveSharePointClientState(claim.watchId, key);
+    const createInput = {
+      changeType: 'updated' as const,
+      clientState,
+      connectionId: claim.connectionId,
+      expiresAt: this.desiredExpiry(),
+      lifecycleNotificationUrl: callbackUrl,
+      notificationUrl: callbackUrl,
+      resource: claim.resource,
+      tenantId: claim.tenantId,
+    };
+    try {
+      return await this.graph.createSubscription(createInput);
+    } catch (error) {
+      if (
+        !(error instanceof SharePointGraphError) ||
+        !['GRAPH_CONFLICT', 'GRAPH_OUTCOME_UNKNOWN'].includes(error.code)
+      ) {
+        throw error;
+      }
+      const matches = (
+        await this.graph.listSubscriptions({
+          connectionId: claim.connectionId,
+          tenantId: claim.tenantId,
+        })
+      ).filter(
+        (candidate) =>
+          candidate.changeType === createInput.changeType &&
+          candidate.clientState === createInput.clientState &&
+          candidate.lifecycleNotificationUrl ===
+            createInput.lifecycleNotificationUrl &&
+          candidate.notificationUrl === createInput.notificationUrl &&
+          candidate.resource === createInput.resource,
+      );
+      if (matches.length !== 1) throw error;
+      return matches[0]!;
+    }
+  }
+
+  private desiredExpiry(): Date {
+    return new Date(
+      this.clock().getTime() + SUBSCRIPTION_LIFETIME_MINUTES * 60 * 1_000,
+    );
   }
 }

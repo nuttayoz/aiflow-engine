@@ -35,6 +35,27 @@ const prepareInput = {
 class ProvisioningRepository implements SharePointProvisioningRepository {
   state?: SharePointProvisioningState;
   readonly baselineItems: SharePointGraphItem[] = [];
+  removalComplete = true;
+  lastWatchReference = true;
+
+  async beginRemoval() {
+    if (this.state === undefined) throw new Error('MISSING_STATE');
+    return {
+      bindingId: this.state.bindingId,
+      connectionId: this.state.connectionId,
+      hasPendingIngestions: !this.removalComplete,
+      lastWatchReference: this.lastWatchReference,
+      ...(this.state.subscriptionId === undefined
+        ? {}
+        : { subscriptionId: this.state.subscriptionId }),
+      tenantId: this.state.tenantId,
+      watchId: this.state.watchId,
+    };
+  }
+
+  async finishRemoval() {
+    return { complete: this.removalComplete };
+  }
 
   async ensureBindingAndWatch(
     input: Parameters<
@@ -180,6 +201,36 @@ describe('SharePoint managed entry provisioner', () => {
     await expect(managed.prepare(prepareInput)).resolves.toEqual({
       retryAt: new Date('2026-07-23T00:00:01.000Z'),
       status: 'PENDING',
+    });
+  });
+
+  it('deletes only the last shared subscription and waits for admitted work', async () => {
+    const repository = new ProvisioningRepository();
+    const graph = new FakeSharePointGraphAdapter([target], () => now);
+    graph.setDeltaPage(target.connectionId, target.driveId, undefined, {
+      finalCursor: 'opaque-final',
+      items: [],
+    });
+    const managed = provisioner(repository, graph);
+    await managed.prepare(prepareInput);
+    const subscriptionId = repository.state?.subscriptionId;
+    expect(subscriptionId).toBeDefined();
+
+    repository.removalComplete = false;
+    await expect(managed.remove(prepareInput)).resolves.toEqual({
+      retryAt: new Date('2026-07-23T00:00:01.000Z'),
+      status: 'PENDING',
+    });
+    await expect(
+      graph.getSubscription({
+        connectionId: target.connectionId,
+        subscriptionId: subscriptionId!,
+      }),
+    ).resolves.toBeUndefined();
+
+    repository.removalComplete = true;
+    await expect(managed.remove(prepareInput)).resolves.toEqual({
+      status: 'READY',
     });
   });
 });

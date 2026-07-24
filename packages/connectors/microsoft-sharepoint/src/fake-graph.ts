@@ -9,7 +9,11 @@ import {
 } from './graph-port';
 
 export type FakeSharePointGraphBehavior =
-  'SUCCEED' | 'THROTTLE' | 'TIMEOUT_AFTER_CREATE' | 'TIMEOUT_BEFORE_CREATE';
+  | 'CURSOR_INVALID'
+  | 'SUCCEED'
+  | 'THROTTLE'
+  | 'TIMEOUT_AFTER_CREATE'
+  | 'TIMEOUT_BEFORE_CREATE';
 
 export const FAKE_SHAREPOINT_ANY_CONNECTION_ID =
   'fake-sharepoint-any-connection';
@@ -382,6 +386,9 @@ export class FakeSharePointGraphAdapter implements SharePointGraphPort {
   }
 
   private failBeforeRead(): void {
+    if (this.behavior === 'CURSOR_INVALID') {
+      throw new SharePointGraphError('GRAPH_CURSOR_INVALID');
+    }
     if (this.behavior === 'THROTTLE') {
       throw new SharePointGraphError(
         'GRAPH_THROTTLED',

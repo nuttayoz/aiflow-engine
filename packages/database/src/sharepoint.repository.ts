@@ -198,6 +198,10 @@ export class PostgresSharePointRepository implements SharePointNotificationRepos
           `
             UPDATE ${this.watches}
             SET notification_generation = notification_generation + 1,
+                subscription_status = CASE
+                  WHEN $4 = 'REAUTHORIZATION_REQUIRED' THEN 'UNKNOWN'
+                  ELSE subscription_status
+                END,
                 sync_command_pending = true,
                 state_version = state_version + 1,
                 next_reconcile_at = LEAST(next_reconcile_at, $3),
@@ -206,7 +210,12 @@ export class PostgresSharePointRepository implements SharePointNotificationRepos
             WHERE tenant_id = $1 AND id = $2
             RETURNING notification_generation, state_version
           `,
-          [input.tenantId, input.watchId, input.receivedAt],
+          [
+            input.tenantId,
+            input.watchId,
+            input.receivedAt,
+            input.notificationKind,
+          ],
         ),
       )[0];
       if (updated === undefined) {

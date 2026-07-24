@@ -133,6 +133,12 @@ const setup = (provisioner: ManagedEntryProvisioner) => {
     deferActivation: jest
       .fn()
       .mockResolvedValue({ ...operation, status: 'WAITING_RETRY' }),
+    completeDeactivation: jest
+      .fn()
+      .mockResolvedValue({ ...operation, status: 'SUCCEEDED' }),
+    deferDeactivation: jest
+      .fn()
+      .mockResolvedValue({ ...operation, status: 'WAITING_RETRY' }),
   } as unknown as jest.Mocked<WorkflowProvisioningRepository>;
   const workflows = {
     findVersionById: jest.fn().mockResolvedValue(version),
@@ -151,6 +157,7 @@ describe('managed entry provisioning', () => {
     const provisioner = {
       connectorId: 'managed-entry',
       prepare: jest.fn().mockResolvedValue({ retryAt, status: 'PENDING' }),
+      remove: jest.fn().mockResolvedValue({ status: 'READY' }),
     } satisfies ManagedEntryProvisioner;
     const { operations, service } = setup(provisioner);
 
@@ -173,6 +180,7 @@ describe('managed entry provisioning', () => {
       prepare: jest
         .fn()
         .mockResolvedValue({ bindingId: 'binding-1', status: 'READY' }),
+      remove: jest.fn().mockResolvedValue({ status: 'READY' }),
     } satisfies ManagedEntryProvisioner;
     const { operations, service } = setup(provisioner);
 
@@ -185,5 +193,40 @@ describe('managed entry provisioning', () => {
       operationId: 'operation-1',
       tenantId: 'tenant-1',
     });
+  });
+
+  it('durably removes the managed entry before completing deactivation', async () => {
+    const deactivation = {
+      ...operation,
+      kind: 'DEACTIVATE' as const,
+      previousVersionId: 'version-1',
+      targetVersionId: undefined,
+    };
+    const retryAt = new Date('2026-07-23T00:00:05.000Z');
+    const provisioner = {
+      connectorId: 'managed-entry',
+      prepare: jest.fn(),
+      remove: jest.fn().mockResolvedValue({ retryAt, status: 'PENDING' }),
+    } satisfies ManagedEntryProvisioner;
+    const { operations, service } = setup(provisioner);
+    operations.claim.mockResolvedValue(deactivation);
+
+    await service.processActivation(input);
+
+    expect(provisioner.remove).toHaveBeenCalledWith({
+      operationId: 'operation-1',
+      projectId: 'project-1',
+      tenantId: 'tenant-1',
+      workflowId: 'workflow-1',
+      workflowVersionId: 'version-1',
+    });
+    expect(operations.deferDeactivation).toHaveBeenCalledWith({
+      expectedStateVersion: 1,
+      leaseOwner: 'worker-1',
+      nextAttemptAt: retryAt,
+      operationId: 'operation-1',
+      tenantId: 'tenant-1',
+    });
+    expect(operations.completeDeactivation).not.toHaveBeenCalled();
   });
 });

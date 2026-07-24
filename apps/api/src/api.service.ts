@@ -187,12 +187,18 @@ const activationView = (
   workflowId: workflow.id,
 });
 
-const deactivationView = (result: WorkflowDeactivationResult) => ({
+const deactivationView = (
+  result: WorkflowDeactivationResult,
+  operation?: ProvisioningOperationRecord,
+) => ({
   acceptingNewDocuments: result.acceptingNewDocuments,
   activeVersionId: result.activeVersionId ?? null,
   cleanupRequired: result.cleanupRequired,
   health: result.health,
-  operation: null,
+  operation:
+    operation === undefined
+      ? null
+      : provisioningOperationView(operation, result.activeVersionId),
   targetVersionId: null,
   workflowId: result.workflowId,
 });
@@ -969,11 +975,23 @@ export class ApiService
       causationId: idempotencyKey,
       correlationId: authorization.correlationId,
       idempotencyKey,
+      operationId: uuidFrom(
+        'workflow-deactivation',
+        authorization.tenantId,
+        idempotencyKey,
+      ),
       projectId: workflow.projectId,
       tenantId: authorization.tenantId,
       workflowId,
     });
-    return deactivationView(result);
+    const operation =
+      result.operationId === undefined
+        ? undefined
+        : await this.requireProvisioning().findById(
+            authorization.tenantId,
+            result.operationId,
+          );
+    return deactivationView(result, operation);
   }
 
   async getOperation(authorization: ApiAuthorization, operationId: string) {

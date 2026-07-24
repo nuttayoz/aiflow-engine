@@ -20,6 +20,7 @@ const assertBatchSize = (batchSize: number): void => {
 
 export class PostgresSharePointRecoveryRepository {
   private readonly bindings: string;
+  private readonly notificationEvents: string;
   private readonly outbox: PostgresOutboxRepository;
   private readonly scopes: string;
   private readonly watches: string;
@@ -29,6 +30,7 @@ export class PostgresSharePointRecoveryRepository {
     schema: string,
   ) {
     this.bindings = table(schema, 'connector_provisioning_bindings');
+    this.notificationEvents = table(schema, 'sharepoint_notification_events');
     this.outbox = new PostgresOutboxRepository(dataSource, schema);
     this.scopes = table(schema, 'sharepoint_binding_scopes');
     this.watches = table(schema, 'sharepoint_drive_watches');
@@ -54,8 +56,8 @@ export class PostgresSharePointRecoveryRepository {
             ORDER BY binding.created_at, binding.id
             LIMIT 1
           ) AS binding ON true
-          WHERE watch.baseline_status = 'COMPLETE'
-            AND watch.subscription_status = 'ACTIVE'
+          WHERE watch.baseline_status IN ('COMPLETE', 'RECONCILING')
+            AND watch.subscription_status IN ('ABSENT', 'ACTIVE', 'UNKNOWN')
             AND NOT watch.sync_command_pending
             AND watch.next_reconcile_at <= clock_timestamp()
             AND (
@@ -110,12 +112,35 @@ export class PostgresSharePointRecoveryRepository {
       return rows.length;
     });
   }
+
+  async purgeExpiredNotificationEvents(batchSize: number): Promise<number> {
+    assertBatchSize(batchSize);
+    const rows = mutationRows<{ id: string }>(
+      await this.dataSource.query(
+        `
+          WITH expired AS (
+            SELECT id
+            FROM ${this.notificationEvents}
+            WHERE expires_at <= clock_timestamp()
+            ORDER BY expires_at, id
+            LIMIT $1
+            FOR UPDATE SKIP LOCKED
+          )
+          DELETE FROM ${this.notificationEvents} AS event
+          USING expired
+          WHERE event.id = expired.id
+          RETURNING event.id
+        `,
+        [batchSize],
+      ),
+    );
+    return rows.length;
+  }
 }
 
 export class PostgresSharePointIngestionRecoveryRepository {
   private readonly ingestions: string;
   private readonly outbox: PostgresOutboxRepository;
-  private readonly storageObjects: string;
 
   constructor(
     private readonly dataSource: DataSource,
@@ -123,7 +148,6 @@ export class PostgresSharePointIngestionRecoveryRepository {
   ) {
     this.ingestions = table(schema, 'document_ingestions');
     this.outbox = new PostgresOutboxRepository(dataSource, schema);
-    this.storageObjects = table(schema, 'storage_objects');
   }
 
   async recoverExpiredLeases(batchSize: number): Promise<number> {
@@ -148,21 +172,6 @@ export class PostgresSharePointIngestionRecoveryRepository {
       }[];
 
       for (const row of rows) {
-        if (row.storage_object_id !== null) {
-          await manager.query(
-            `
-              UPDATE ${this.storageObjects}
-              SET status = 'ABANDONED',
-                  state_version = state_version + 1,
-                  updated_at = clock_timestamp()
-              WHERE tenant_id = $1
-                AND id = $2
-                AND status = 'RESERVED'
-            `,
-            [row.tenant_id, row.storage_object_id],
-          );
-        }
-
         const recovered = mutationRows<{
           next_attempt_at: Date | string;
           state_version: number | string;
@@ -175,7 +184,6 @@ export class PostgresSharePointIngestionRecoveryRepository {
                   next_attempt_at = clock_timestamp() + interval '1 second',
                   lease_owner = NULL,
                   lease_expires_at = NULL,
-                  storage_object_id = NULL,
                   failure_code = 'SHAREPOINT_INGESTION_LEASE_EXPIRED',
                   updated_at = clock_timestamp()
               WHERE tenant_id = $1

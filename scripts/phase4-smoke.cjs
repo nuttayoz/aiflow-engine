@@ -250,9 +250,35 @@ const main = async () => {
     throw new Error('SHAREPOINT_VALIDATION_CHALLENGE_FAILED');
   }
 
+  const deactivation = await request(
+    `/api/v1/workflows/${workflow.id}/activation`,
+    {
+      headers: { 'Idempotency-Key': `deactivation-${runId}` },
+      method: 'DELETE',
+    },
+  );
+  if (!deactivation.operation?.id) {
+    throw new Error('SHAREPOINT_DEACTIVATION_OPERATION_MISSING');
+  }
+  await waitFor(
+    'SharePoint deactivation',
+    () =>
+      request(`/api/v1/provisioning-operations/${deactivation.operation.id}`),
+    (operation) => operation.status === 'SUCCEEDED',
+  );
+  const inactive = await request(`/api/v1/workflows/${workflow.id}/activation`);
+  if (
+    inactive.activeVersionId !== null ||
+    inactive.acceptingNewDocuments ||
+    inactive.cleanupRequired
+  ) {
+    throw new Error('SHAREPOINT_DEACTIVATION_INCOMPLETE');
+  }
+
   process.stdout.write(
     `${JSON.stringify(
       {
+        deactivationOperationId: deactivation.operation.id,
         executionId: execution.executionId,
         filename: execution.originalFilename,
         sourceConnector: 'microsoft-sharepoint',

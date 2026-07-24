@@ -45,7 +45,30 @@ export interface SharePointProvisioningState {
   readonly watchId: string;
 }
 
+export interface SharePointRemovalState {
+  readonly bindingId: string;
+  readonly connectionId: string;
+  readonly hasPendingIngestions: boolean;
+  readonly lastWatchReference: boolean;
+  readonly subscriptionId?: string;
+  readonly tenantId: string;
+  readonly watchId: string;
+}
+
 export interface SharePointProvisioningRepository {
+  beginRemoval(input: {
+    readonly operationId: string;
+    readonly projectId: string;
+    readonly tenantId: string;
+    readonly workflowId: string;
+    readonly workflowVersionId: string;
+  }): Promise<SharePointRemovalState>;
+  finishRemoval(input: {
+    readonly bindingId: string;
+    readonly subscriptionAbsent: boolean;
+    readonly tenantId: string;
+    readonly watchId: string;
+  }): Promise<{ readonly complete: boolean }>;
   ensureBindingAndWatch(input: {
     readonly bindingId: string;
     readonly capabilityHash: string;
@@ -174,6 +197,70 @@ export class SharePointManagedEntryProvisioner implements ManagedEntryProvisione
       }
       return state.baselineStatus === 'COMPLETE'
         ? { bindingId: state.bindingId, status: 'READY' as const }
+        : { retryAt: this.retryAt(), status: 'PENDING' as const };
+    } catch (error) {
+      if (error instanceof SharePointGraphError) {
+        if (error.code === 'GRAPH_THROTTLED' && error.retryAt !== undefined) {
+          return { retryAt: error.retryAt, status: 'PENDING' as const };
+        }
+        if (
+          error.code === 'GRAPH_UNAVAILABLE' ||
+          error.code === 'GRAPH_OUTCOME_UNKNOWN'
+        ) {
+          return { retryAt: this.retryAt(), status: 'PENDING' as const };
+        }
+      }
+      throw error;
+    }
+  }
+
+  async remove(input: {
+    readonly operationId: string;
+    readonly projectId: string;
+    readonly tenantId: string;
+    readonly workflowId: string;
+    readonly workflowVersionId: string;
+  }) {
+    try {
+      const state = await this.repository.beginRemoval(input);
+      let subscriptionAbsent = state.subscriptionId === undefined;
+      if (state.lastWatchReference && state.subscriptionId !== undefined) {
+        try {
+          await this.graph.deleteSubscription({
+            connectionId: state.connectionId,
+            subscriptionId: state.subscriptionId,
+            tenantId: state.tenantId,
+          });
+          subscriptionAbsent = true;
+        } catch (error) {
+          if (
+            error instanceof SharePointGraphError &&
+            error.code === 'GRAPH_NOT_FOUND'
+          ) {
+            subscriptionAbsent = true;
+          } else if (
+            error instanceof SharePointGraphError &&
+            ['GRAPH_OUTCOME_UNKNOWN', 'GRAPH_UNAVAILABLE'].includes(error.code)
+          ) {
+            const current = await this.graph.getSubscription({
+              connectionId: state.connectionId,
+              subscriptionId: state.subscriptionId,
+              tenantId: state.tenantId,
+            });
+            subscriptionAbsent = current === undefined;
+          } else {
+            throw error;
+          }
+        }
+      }
+      const result = await this.repository.finishRemoval({
+        bindingId: state.bindingId,
+        subscriptionAbsent,
+        tenantId: state.tenantId,
+        watchId: state.watchId,
+      });
+      return result.complete
+        ? { status: 'READY' as const }
         : { retryAt: this.retryAt(), status: 'PENDING' as const };
     } catch (error) {
       if (error instanceof SharePointGraphError) {

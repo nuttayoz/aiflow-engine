@@ -143,6 +143,7 @@ export interface RequestWorkflowDeactivationInput {
   readonly causationId: string;
   readonly correlationId: string;
   readonly idempotencyKey: string;
+  readonly operationId: string;
   readonly projectId: string;
   readonly tenantId: string;
   readonly workflowId: string;
@@ -153,6 +154,7 @@ export interface WorkflowDeactivationResult {
   readonly activeVersionId?: string;
   readonly cleanupRequired: boolean;
   readonly health: WorkflowRecord['health'];
+  readonly operationId?: string;
   readonly workflowId: string;
 }
 
@@ -180,6 +182,19 @@ export interface WorkflowProvisioningRepository {
     readonly tenantId: string;
   }): Promise<ProvisioningOperationRecord>;
   deferActivation(input: {
+    readonly expectedStateVersion: number;
+    readonly leaseOwner: string;
+    readonly nextAttemptAt: Date;
+    readonly operationId: string;
+    readonly tenantId: string;
+  }): Promise<ProvisioningOperationRecord>;
+  completeDeactivation(input: {
+    readonly expectedStateVersion: number;
+    readonly leaseOwner: string;
+    readonly operationId: string;
+    readonly tenantId: string;
+  }): Promise<ProvisioningOperationRecord>;
+  deferDeactivation(input: {
     readonly expectedStateVersion: number;
     readonly leaseOwner: string;
     readonly nextAttemptAt: Date;
@@ -225,4 +240,14 @@ export interface ManagedEntryProvisioner {
     readonly workflowId: string;
     readonly workflowVersionId: string;
   }): Promise<ManagedEntryProvisioningResult>;
+  remove(input: {
+    readonly operationId: string;
+    readonly projectId: string;
+    readonly tenantId: string;
+    readonly workflowId: string;
+    readonly workflowVersionId: string;
+  }): Promise<
+    | { readonly status: 'READY' }
+    | { readonly retryAt: Date; readonly status: 'PENDING' }
+  >;
 }

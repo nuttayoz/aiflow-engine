@@ -16,27 +16,42 @@ const target = {
   siteId: 'site-1',
 };
 const claim: SharePointSyncClaim = {
+  clientStateKeyVersion: 1,
   connectionId: target.connectionId,
   cursor: 'committed-cursor',
   driveId: target.driveId,
+  inventoryGeneration: 1,
+  mode: 'DELTA',
   notificationGeneration: 3,
   projectId: 'project-1',
   resource: 'drives/drive-1/root',
   subscriptionExpiresAt: new Date('2026-08-10T00:00:00.000Z'),
   subscriptionId: 'subscription-1',
+  subscriptionStatus: 'ACTIVE',
   tenantId: 'tenant-1',
   watchId: 'watch-1',
 };
 
 class SyncRepository implements SharePointSyncRepository {
   appliedItems: readonly SharePointGraphItem[] = [];
+  claimValue: SharePointSyncClaim = claim;
   deferredAt?: Date;
+  cursorReset = false;
+  reconciledSubscriptionId?: string;
 
   async claim() {
-    return claim;
+    return this.claimValue;
   }
 
   async saveRenewedSubscription() {}
+
+  async saveReconciledSubscription(
+    input: Parameters<
+      SharePointSyncRepository['saveReconciledSubscription']
+    >[0],
+  ) {
+    this.reconciledSubscriptionId = input.subscription.id;
+  }
 
   async applyDeltaPage(
     input: Parameters<SharePointSyncRepository['applyDeltaPage']>[0],
@@ -46,6 +61,10 @@ class SyncRepository implements SharePointSyncRepository {
 
   async defer(input: Parameters<SharePointSyncRepository['defer']>[0]) {
     this.deferredAt = input.retryAt;
+  }
+
+  async resetCursor() {
+    this.cursorReset = true;
   }
 }
 
@@ -106,5 +125,69 @@ describe('SharePoint sync processor', () => {
       new SharePointSyncProcessor(repository, graph, () => now).process(input),
     ).resolves.toBe('DEFERRED');
     expect(repository.deferredAt).toEqual(new Date('2026-07-23T00:00:01.000Z'));
+  });
+
+  it('turns an expired delta cursor into a durable rebaseline', async () => {
+    const repository = new SyncRepository();
+    const graph = new FakeSharePointGraphAdapter([target], () => now);
+    graph.setBehavior('CURSOR_INVALID');
+
+    await expect(
+      new SharePointSyncProcessor(repository, graph, () => now).process(input),
+    ).resolves.toBe('DEFERRED');
+    expect(repository.cursorReset).toBe(true);
+    expect(repository.deferredAt).toBeUndefined();
+  });
+
+  it('recreates a provider-side missing subscription before delta', async () => {
+    const repository = new SyncRepository();
+    repository.claimValue = { ...claim, subscriptionStatus: 'UNKNOWN' };
+    const graph = new FakeSharePointGraphAdapter([target], () => now);
+    graph.setDeltaPage(target.connectionId, target.driveId, claim.cursor, {
+      finalCursor: 'next-cursor',
+      items: [],
+    });
+    const key = {
+      keyVersion: 1,
+      rootKey: new Uint8Array(32).fill(7),
+    };
+
+    await expect(
+      new SharePointSyncProcessor(repository, graph, () => now, {
+        callbackUrl:
+          'http://localhost:3000/provider-callbacks/v1/microsoft-graph/sharepoint',
+        keys: [key],
+      }).process(input),
+    ).resolves.toBe('PROCESSED');
+    expect(repository.reconciledSubscriptionId).toBeDefined();
+  });
+
+  it('recreates an absent subscription after a last-reference race', async () => {
+    const repository = new SyncRepository();
+    repository.claimValue = {
+      ...claim,
+      subscriptionExpiresAt: undefined,
+      subscriptionId: undefined,
+      subscriptionStatus: 'ABSENT',
+    };
+    const graph = new FakeSharePointGraphAdapter([target], () => now);
+    graph.setDeltaPage(target.connectionId, target.driveId, claim.cursor, {
+      finalCursor: 'next-cursor',
+      items: [],
+    });
+
+    await expect(
+      new SharePointSyncProcessor(repository, graph, () => now, {
+        callbackUrl:
+          'http://localhost:3000/provider-callbacks/v1/microsoft-graph/sharepoint',
+        keys: [
+          {
+            keyVersion: 1,
+            rootKey: new Uint8Array(32).fill(7),
+          },
+        ],
+      }).process(input),
+    ).resolves.toBe('PROCESSED');
+    expect(repository.reconciledSubscriptionId).toBeDefined();
   });
 });

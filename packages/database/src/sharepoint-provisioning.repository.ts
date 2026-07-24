@@ -63,6 +63,7 @@ const isBounded = (value: string | undefined, maximumLength: number): boolean =>
 
 export class PostgresSharePointProvisioningRepository implements SharePointProvisioningRepository {
   private readonly bindings: string;
+  private readonly ingestions: string;
   private readonly items: string;
   private readonly scopes: string;
   private readonly watches: string;
@@ -73,9 +74,204 @@ export class PostgresSharePointProvisioningRepository implements SharePointProvi
     private readonly cursorProtector: SharePointCursorProtector,
   ) {
     this.bindings = table(schema, 'connector_provisioning_bindings');
+    this.ingestions = table(schema, 'document_ingestions');
     this.items = table(schema, 'sharepoint_drive_items');
     this.scopes = table(schema, 'sharepoint_binding_scopes');
     this.watches = table(schema, 'sharepoint_drive_watches');
+  }
+
+  async beginRemoval(
+    input: Parameters<SharePointProvisioningRepository['beginRemoval']>[0],
+  ) {
+    return this.dataSource.transaction(async (manager) => {
+      const bindings = (await manager.query(
+        `
+          SELECT
+            binding.id AS binding_id,
+            binding.connection_id,
+            watch.id AS watch_id,
+            watch.subscription_id
+          FROM ${this.bindings} AS binding
+          JOIN ${this.scopes} AS scope
+            ON scope.tenant_id = binding.tenant_id
+           AND scope.binding_id = binding.id
+          JOIN ${this.watches} AS watch
+            ON watch.tenant_id = scope.tenant_id
+           AND watch.id = scope.watch_id
+          WHERE binding.tenant_id = $1
+            AND binding.project_id = $2
+            AND binding.workflow_id = $3
+            AND binding.workflow_version_id = $4
+            AND binding.connector_id = 'microsoft-sharepoint'
+            AND binding.status IN ('ACTIVE', 'DRAINING')
+          FOR UPDATE OF binding, watch
+        `,
+        [
+          input.tenantId,
+          input.projectId,
+          input.workflowId,
+          input.workflowVersionId,
+        ],
+      )) as {
+        binding_id: string;
+        connection_id: string;
+        subscription_id: string | null;
+        watch_id: string;
+      }[];
+      const binding = bindings[0];
+      if (binding === undefined) {
+        throw new Error('SHAREPOINT_BINDING_NOT_FOUND');
+      }
+      await manager.query(
+        `
+          UPDATE ${this.bindings}
+          SET status = 'DRAINING',
+              accepting_new_documents = false,
+              drain_deadline_at = COALESCE(
+                drain_deadline_at,
+                clock_timestamp() + interval '15 minutes'
+              ),
+              state_version = state_version + 1,
+              updated_at = clock_timestamp()
+          WHERE tenant_id = $1 AND id = $2
+        `,
+        [input.tenantId, binding.binding_id],
+      );
+      const references = (await manager.query(
+        `
+          SELECT count(*)::integer AS count
+          FROM ${this.scopes} AS scope
+          JOIN ${this.bindings} AS candidate
+            ON candidate.tenant_id = scope.tenant_id
+           AND candidate.id = scope.binding_id
+          WHERE scope.tenant_id = $1
+            AND scope.watch_id = $2
+            AND candidate.id <> $3
+            AND candidate.status IN ('PREPARING', 'ACTIVE')
+        `,
+        [input.tenantId, binding.watch_id, binding.binding_id],
+      )) as { count: number | string }[];
+      const pending = (await manager.query(
+        `
+          SELECT count(*)::integer AS count
+          FROM ${this.ingestions}
+          WHERE tenant_id = $1
+            AND connector_provisioning_binding_id = $2
+            AND status IN ('PENDING', 'RUNNING', 'WAITING_RETRY')
+        `,
+        [input.tenantId, binding.binding_id],
+      )) as { count: number | string }[];
+      return {
+        bindingId: binding.binding_id,
+        connectionId: binding.connection_id,
+        hasPendingIngestions: Number(pending[0]?.count ?? 0) > 0,
+        lastWatchReference: Number(references[0]?.count ?? 0) === 0,
+        ...(binding.subscription_id === null
+          ? {}
+          : { subscriptionId: binding.subscription_id }),
+        tenantId: input.tenantId,
+        watchId: binding.watch_id,
+      };
+    });
+  }
+
+  async finishRemoval(
+    input: Parameters<SharePointProvisioningRepository['finishRemoval']>[0],
+  ) {
+    return this.dataSource.transaction(async (manager) => {
+      const rows = (await manager.query(
+        `
+          SELECT binding.id
+          FROM ${this.bindings} AS binding
+          JOIN ${this.scopes} AS scope
+            ON scope.tenant_id = binding.tenant_id
+           AND scope.binding_id = binding.id
+          JOIN ${this.watches} AS watch
+            ON watch.tenant_id = scope.tenant_id
+           AND watch.id = scope.watch_id
+          WHERE binding.tenant_id = $1
+            AND binding.id = $2
+            AND watch.id = $3
+            AND binding.status = 'DRAINING'
+          FOR UPDATE OF binding, watch
+        `,
+        [input.tenantId, input.bindingId, input.watchId],
+      )) as { id: string }[];
+      if (rows.length !== 1) {
+        throw new Error('SHAREPOINT_REMOVAL_STATE_CONFLICT');
+      }
+      const references = (await manager.query(
+        `
+          SELECT count(*)::integer AS count
+          FROM ${this.scopes} AS scope
+          JOIN ${this.bindings} AS binding
+            ON binding.tenant_id = scope.tenant_id
+           AND binding.id = scope.binding_id
+          WHERE scope.tenant_id = $1
+            AND scope.watch_id = $2
+            AND binding.id <> $3
+            AND binding.status IN ('PREPARING', 'ACTIVE')
+        `,
+        [input.tenantId, input.watchId, input.bindingId],
+      )) as { count: number | string }[];
+      const lastReference = Number(references[0]?.count ?? 0) === 0;
+      if (input.subscriptionAbsent) {
+        await manager.query(
+          `
+            UPDATE ${this.watches}
+            SET subscription_id = NULL,
+                subscription_expires_at = NULL,
+                subscription_status = 'ABSENT',
+                health = CASE WHEN $3 THEN 'UNKNOWN' ELSE 'DEGRADED' END,
+                sync_command_pending = NOT $3,
+                next_reconcile_at = clock_timestamp(),
+                state_version = state_version + 1,
+                updated_at = clock_timestamp()
+            WHERE tenant_id = $1 AND id = $2
+          `,
+          [input.tenantId, input.watchId, lastReference],
+        );
+      }
+      if (lastReference && !input.subscriptionAbsent) {
+        return { complete: false };
+      }
+      const pending = (await manager.query(
+        `
+          SELECT count(*)::integer AS count
+          FROM ${this.ingestions}
+          WHERE tenant_id = $1
+            AND connector_provisioning_binding_id = $2
+            AND status IN ('PENDING', 'RUNNING', 'WAITING_RETRY')
+        `,
+        [input.tenantId, input.bindingId],
+      )) as { count: number | string }[];
+      if (Number(pending[0]?.count ?? 0) > 0) {
+        return { complete: false };
+      }
+      const retired = mutationRows<{ id: string }>(
+        await manager.query(
+          `
+            UPDATE ${this.bindings}
+            SET status = 'RETIRED',
+                health = 'UNKNOWN',
+                accepting_new_documents = false,
+                drain_deadline_at = NULL,
+                retired_at = clock_timestamp(),
+                state_version = state_version + 1,
+                updated_at = clock_timestamp()
+            WHERE tenant_id = $1
+              AND id = $2
+              AND status = 'DRAINING'
+            RETURNING id
+          `,
+          [input.tenantId, input.bindingId],
+        ),
+      );
+      if (retired.length !== 1) {
+        throw new Error('SHAREPOINT_REMOVAL_STATE_CONFLICT');
+      }
+      return { complete: true };
+    });
   }
 
   async ensureBindingAndWatch(
@@ -349,7 +545,7 @@ export class PostgresSharePointProvisioningRepository implements SharePointProvi
     return this.dataSource.transaction(async (manager) => {
       const watches = (await manager.query(
         `
-          SELECT id
+          SELECT id, inventory_generation
           FROM ${this.watches}
           WHERE tenant_id = $1
             AND id = $2
@@ -358,7 +554,7 @@ export class PostgresSharePointProvisioningRepository implements SharePointProvi
           FOR UPDATE
         `,
         [input.tenantId, input.watchId, input.expectedStateVersion],
-      )) as { id: string }[];
+      )) as { id: string; inventory_generation: number | string }[];
       if (watches.length !== 1) {
         throw new Error('SHAREPOINT_WATCH_STATE_CONFLICT');
       }
@@ -368,7 +564,7 @@ export class PostgresSharePointProvisioningRepository implements SharePointProvi
           manager,
           input.tenantId,
           input.watchId,
-          input.expectedStateVersion + 1,
+          Number(watches[0]!.inventory_generation),
           input.observedAt,
           item,
         );
