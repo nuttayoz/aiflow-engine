@@ -22,6 +22,8 @@ interface ClaimRow {
   project_id: string;
   source_version: string;
   source_version_kind: 'CTAG' | 'ETAG';
+  storage_key: string | null;
+  storage_object_id: string | null;
 }
 
 interface CompletionRow {
@@ -75,7 +77,19 @@ export class PostgresSharePointIngestionRepository implements SharePointIngestio
   constructor(
     private readonly dataSource: DataSource,
     schema: string,
+    private readonly admission = {
+      perConnection: 4,
+      perTenant: 8,
+    },
   ) {
+    if (
+      !Number.isInteger(admission.perConnection) ||
+      !Number.isInteger(admission.perTenant) ||
+      admission.perConnection < 1 ||
+      admission.perTenant < admission.perConnection
+    ) {
+      throw new Error('SHAREPOINT_ADMISSION_CONFIGURATION_INVALID');
+    }
     this.bindings = table(schema, 'connector_provisioning_bindings');
     this.documents = table(schema, 'documents');
     this.executions = table(schema, 'executions');
@@ -100,7 +114,6 @@ export class PostgresSharePointIngestionRepository implements SharePointIngestio
     ) {
       throw new Error('LEASE_DURATION_INVALID');
     }
-    const storageObjectId = randomUUID();
     const row = await this.dataSource.transaction(async (manager) => {
       const inbox = mutationRows<{ id: string }>(
         await manager.query(
@@ -136,6 +149,10 @@ export class PostgresSharePointIngestionRepository implements SharePointIngestio
         ),
       );
       if (inbox.length === 0) return undefined;
+      await manager.query(
+        'SELECT pg_advisory_xact_lock(hashtextextended($1, 41001))',
+        [input.tenantId],
+      );
 
       const candidates = (await manager.query(
         `
@@ -148,7 +165,9 @@ export class PostgresSharePointIngestionRepository implements SharePointIngestio
             ingestion.source_version_kind,
             ingestion.source_version,
             watch.connection_id,
-            item.name AS file_name
+            item.name AS file_name,
+            ingestion.storage_object_id,
+            storage.object_key AS storage_key
           FROM ${this.ingestions} AS ingestion
           JOIN ${this.bindings} AS binding
             ON binding.tenant_id = ingestion.tenant_id
@@ -160,6 +179,9 @@ export class PostgresSharePointIngestionRepository implements SharePointIngestio
             ON item.tenant_id = ingestion.tenant_id
            AND item.watch_id = ingestion.watch_id
            AND item.item_id = ingestion.item_id
+          LEFT JOIN ${this.storageObjects} AS storage
+            ON storage.tenant_id = ingestion.tenant_id
+           AND storage.id = ingestion.storage_object_id
           WHERE ingestion.tenant_id = $1
             AND ingestion.project_id = $2
             AND ingestion.id = $3
@@ -171,9 +193,11 @@ export class PostgresSharePointIngestionRepository implements SharePointIngestio
                 AND ingestion.next_attempt_at <= clock_timestamp()
               )
             )
-            AND ingestion.storage_object_id IS NULL
+            AND (
+              ingestion.storage_object_id IS NULL
+              OR storage.status = 'RESERVED'
+            )
             AND binding.status IN ('ACTIVE', 'DRAINING')
-            AND binding.accepting_new_documents
             AND item.item_kind = 'FILE'
             AND item.name IS NOT NULL
           FOR UPDATE OF ingestion
@@ -197,25 +221,94 @@ export class PostgresSharePointIngestionRepository implements SharePointIngestio
         );
         return undefined;
       }
-      const storageKey = buildStorageObjectKey(input.tenantId, storageObjectId);
-      await manager.query(
+      const running = (await manager.query(
         `
-          INSERT INTO ${this.storageObjects} (
-            id,
-            tenant_id,
-            project_id,
-            kind,
-            status,
-            location_alias,
-            object_key,
-            retention_until
-          ) VALUES (
-            $1, $2, $3, 'SOURCE_DOCUMENT', 'RESERVED', 'PRIMARY', $4,
-            clock_timestamp() + interval '30 days'
-          )
+          SELECT
+            count(*)::integer AS tenant_count,
+            count(*) FILTER (
+              WHERE watch.connection_id = $2
+            )::integer AS connection_count
+          FROM ${this.ingestions} AS ingestion
+          JOIN ${this.watches} AS watch
+            ON watch.tenant_id = ingestion.tenant_id
+           AND watch.id = ingestion.watch_id
+          WHERE ingestion.tenant_id = $1
+            AND ingestion.status = 'RUNNING'
+            AND ingestion.lease_expires_at > clock_timestamp()
         `,
-        [storageObjectId, input.tenantId, input.projectId, storageKey],
-      );
+        [input.tenantId, candidate.connection_id],
+      )) as {
+        connection_count: number | string;
+        tenant_count: number | string;
+      }[];
+      if (
+        Number(running[0]?.tenant_count ?? 0) >= this.admission.perTenant ||
+        Number(running[0]?.connection_count ?? 0) >=
+          this.admission.perConnection
+      ) {
+        const deferred = mutationRows<{
+          next_attempt_at: Date | string;
+          state_version: number | string;
+        }>(
+          await manager.query(
+            `
+              UPDATE ${this.ingestions}
+              SET status = 'WAITING_RETRY',
+                  state_version = state_version + 1,
+                  next_attempt_at = clock_timestamp() + interval '1 second',
+                  failure_code = 'SHAREPOINT_ADMISSION_DEFERRED',
+                  updated_at = clock_timestamp()
+              WHERE tenant_id = $1
+                AND id = $2
+                AND state_version = $3
+              RETURNING state_version, next_attempt_at
+            `,
+            [input.tenantId, input.ingestionId, input.expectedStateVersion],
+          ),
+        )[0];
+        if (deferred !== undefined) {
+          await this.appendIngestionMessage(manager, {
+            availableAt: new Date(deferred.next_attempt_at),
+            expectedStateVersion: Number(deferred.state_version),
+            ingestionId: input.ingestionId,
+            projectId: input.projectId,
+            tenantId: input.tenantId,
+          });
+        }
+        await manager.query(
+          `
+            UPDATE ${this.inbox}
+            SET outcome = 'STALE', completed_at = clock_timestamp()
+            WHERE consumer_name = $1 AND message_id = $2
+          `,
+          [input.consumerName, input.messageId],
+        );
+        return undefined;
+      }
+      const storageObjectId = candidate.storage_object_id ?? randomUUID();
+      const storageKey =
+        candidate.storage_key ??
+        buildStorageObjectKey(input.tenantId, storageObjectId);
+      if (candidate.storage_object_id === null) {
+        await manager.query(
+          `
+            INSERT INTO ${this.storageObjects} (
+              id,
+              tenant_id,
+              project_id,
+              kind,
+              status,
+              location_alias,
+              object_key,
+              retention_until
+            ) VALUES (
+              $1, $2, $3, 'SOURCE_DOCUMENT', 'RESERVED', 'PRIMARY', $4,
+              clock_timestamp() + interval '30 days'
+            )
+          `,
+          [storageObjectId, input.tenantId, input.projectId, storageKey],
+        );
+      }
       const claimed = mutationRows<{ id: string }>(
         await manager.query(
           `
@@ -249,7 +342,7 @@ export class PostgresSharePointIngestionRepository implements SharePointIngestio
       if (claimed.length !== 1) {
         throw new Error('SHAREPOINT_INGESTION_STATE_CONFLICT');
       }
-      return { ...candidate, storageKey };
+      return { ...candidate, storageKey, storageObjectId };
     });
     if (row === undefined) return undefined;
     return {
@@ -263,7 +356,7 @@ export class PostgresSharePointIngestionRepository implements SharePointIngestio
       sourceVersion: row.source_version,
       sourceVersionKind: row.source_version_kind,
       storageKey: row.storageKey,
-      storageObjectId,
+      storageObjectId: row.storageObjectId,
       tenantId: input.tenantId,
     };
   }
@@ -316,9 +409,6 @@ export class PostgresSharePointIngestionRepository implements SharePointIngestio
             AND ingestion.lease_expires_at > clock_timestamp()
             AND ingestion.storage_object_id = $4
             AND binding.status IN ('ACTIVE', 'DRAINING')
-            AND binding.accepting_new_documents
-            AND workflow.status = 'ACTIVE'
-            AND workflow.accepting_new_documents
             AND item.item_kind = 'FILE'
             AND CASE ingestion.source_version_kind
               WHEN 'CTAG' THEN item.c_tag = ingestion.source_version
@@ -538,7 +628,6 @@ export class PostgresSharePointIngestionRepository implements SharePointIngestio
       throw new Error('SHAREPOINT_INGESTION_RETRY_AT_INVALID');
     }
     await this.dataSource.transaction(async (manager) => {
-      await this.abandonStorage(manager, input.claim);
       const updated = mutationRows<{ state_version: number | string }>(
         await manager.query(
           `
@@ -548,7 +637,6 @@ export class PostgresSharePointIngestionRepository implements SharePointIngestio
                 next_attempt_at = $4,
                 lease_owner = NULL,
                 lease_expires_at = NULL,
-                storage_object_id = NULL,
                 failure_code = $5,
                 updated_at = clock_timestamp()
             WHERE tenant_id = $1

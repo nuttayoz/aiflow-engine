@@ -24,6 +24,9 @@ const safeTelemetryError = (error: unknown): Error => {
 };
 
 export class RuntimeTelemetry {
+  private readonly connectorOperations: Counter<
+    'connector' | 'operation' | 'outcome' | 'role'
+  >;
   private readonly messages: Counter<'outcome' | 'role' | 'type'>;
   private readonly outbox: Counter<'outcome' | 'role'>;
   private readonly registry = new Registry();
@@ -44,6 +47,12 @@ export class RuntimeTelemetry {
       help: 'Handled AiFlow command messages.',
       labelNames: ['role', 'type', 'outcome'],
       name: 'aiflow_engine_messages_handled_total',
+      registers: [this.registry],
+    });
+    this.connectorOperations = new Counter({
+      help: 'AiFlow connector operation outcomes.',
+      labelNames: ['role', 'connector', 'operation', 'outcome'],
+      name: 'aiflow_engine_connector_operations_total',
       registers: [this.registry],
     });
     this.outbox = new Counter({
@@ -107,6 +116,15 @@ export class RuntimeTelemetry {
 
   recordMessage(type: string, outcome: MessageOutcome): void {
     this.messages.inc({ outcome, role: this.role, type });
+  }
+
+  recordConnector(connector: string, operation: string, outcome: string): void {
+    this.connectorOperations.inc({
+      connector,
+      operation,
+      outcome,
+      role: this.role,
+    });
   }
 
   recordOutbox(published: number, failed: number): void {

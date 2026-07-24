@@ -271,6 +271,11 @@ export class FoundationWorkerService
       tenantId: envelope.tenantId,
       watchId: envelope.data.watchId,
     });
+    this.telemetry.recordConnector(
+      'microsoft-sharepoint',
+      'sync',
+      outcome.toLowerCase(),
+    );
     return outcome === 'STALE' ? 'STALE' : 'CLAIMED';
   }
 
@@ -291,6 +296,11 @@ export class FoundationWorkerService
       projectId: envelope.projectId,
       tenantId: envelope.tenantId,
     });
+    this.telemetry.recordConnector(
+      'microsoft-sharepoint',
+      'ingestion',
+      outcome.toLowerCase(),
+    );
     return outcome === 'STALE' ? 'STALE' : 'CLAIMED';
   }
 
@@ -413,6 +423,11 @@ export class FoundationWorkerService
         new PostgresSharePointIngestionRepository(
           this.database.dataSource,
           schema,
+          {
+            perConnection:
+              this.sharePointConfig.ingestionConcurrencyPerConnection,
+            perTenant: this.sharePointConfig.ingestionConcurrencyPerTenant,
+          },
         ),
         graph,
         storage,
@@ -429,8 +444,17 @@ export class FoundationWorkerService
           this.database.dataSource,
           schema,
           cursorProtector,
+          {
+            perConnection: this.sharePointConfig.syncConcurrencyPerConnection,
+            perTenant: this.sharePointConfig.syncConcurrencyPerTenant,
+          },
         ),
         graph,
+        undefined,
+        {
+          callbackUrl: this.sharePointConfig.callbackUrl,
+          keys: [key],
+        },
       ),
     };
   }

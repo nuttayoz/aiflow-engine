@@ -107,6 +107,9 @@ export interface DirectUploadStoragePort {
 
 export interface ObjectStoragePort {
   deleteExactVersion(input: DeleteObjectInput): Promise<void>;
+  headCurrentVersion(input: {
+    key: string;
+  }): Promise<StoredObjectMetadata | undefined>;
   headExactVersion(input: {
     key: string;
     versionId: string;

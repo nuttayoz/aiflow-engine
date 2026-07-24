@@ -117,25 +117,37 @@ export class SharePointIngestionProcessor {
         });
         return 'SKIPPED';
       }
-      const content = await this.graph.openFileContent({
-        connectionId: claim.connectionId,
-        driveId: claim.driveId,
-        itemId: claim.itemId,
-        tenantId: claim.tenantId,
-      });
-      if (
-        content.contentLength !== before.sizeBytes ||
-        content.contentLength > this.maximumDocumentBytes
-      ) {
-        throw new Error('SHAREPOINT_CONTENT_LENGTH_MISMATCH');
-      }
-      const metadata = await this.storage.putImmutableStreaming({
-        contentLength: content.contentLength,
-        contentType: content.contentType,
+      let metadata = await this.storage.headCurrentVersion({
         key: claim.storageKey,
-        maximumBytes: this.maximumDocumentBytes,
-        stream: content.stream,
       });
+      if (metadata !== undefined && metadata.sizeBytes !== before.sizeBytes) {
+        await this.storage.deleteExactVersion({
+          key: metadata.key,
+          versionId: metadata.versionId,
+        });
+        metadata = undefined;
+      }
+      if (metadata === undefined) {
+        const content = await this.graph.openFileContent({
+          connectionId: claim.connectionId,
+          driveId: claim.driveId,
+          itemId: claim.itemId,
+          tenantId: claim.tenantId,
+        });
+        if (
+          content.contentLength !== before.sizeBytes ||
+          content.contentLength > this.maximumDocumentBytes
+        ) {
+          throw new Error('SHAREPOINT_CONTENT_LENGTH_MISMATCH');
+        }
+        metadata = await this.storage.putImmutableStreaming({
+          contentLength: content.contentLength,
+          contentType: content.contentType,
+          key: claim.storageKey,
+          maximumBytes: this.maximumDocumentBytes,
+          stream: content.stream,
+        });
+      }
       const after = await this.graph.getItem({
         connectionId: claim.connectionId,
         driveId: claim.driveId,

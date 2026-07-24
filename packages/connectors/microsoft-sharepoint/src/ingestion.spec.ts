@@ -99,6 +99,7 @@ describe('SharePoint ingestion processor', () => {
     );
     const storage = {
       deleteExactVersion: jest.fn(),
+      headCurrentVersion: jest.fn().mockResolvedValue(undefined),
       putImmutableStreaming: jest
         .fn()
         .mockImplementation(async (input: { stream: Readable }) => {
@@ -125,6 +126,50 @@ describe('SharePoint ingestion processor', () => {
         tenantId: claim.tenantId,
       }),
     ).resolves.toBe('PROCESSED');
+    expect(repository.completed).toEqual(storageMetadata);
+  });
+
+  it('adopts a complete orphaned upload after a worker crash', async () => {
+    const repository = new IngestionRepository();
+    const graph = new FakeSharePointGraphAdapter([target]);
+    graph.setDeltaPage(target.connectionId, target.driveId, undefined, {
+      finalCursor: 'cursor-1',
+      items: [
+        {
+          cTag: claim.sourceVersion,
+          contentType: 'application/pdf',
+          eTag: 'etag-1',
+          id: claim.itemId,
+          kind: 'FILE',
+          name: claim.fileName,
+          parentId: target.folderId,
+          sizeBytes: content.byteLength,
+        },
+      ],
+    });
+    const openContent = jest.spyOn(graph, 'openFileContent');
+    const storage = {
+      deleteExactVersion: jest.fn(),
+      headCurrentVersion: jest.fn().mockResolvedValue(storageMetadata),
+      putImmutableStreaming: jest.fn(),
+    } as unknown as ObjectStoragePort;
+
+    await expect(
+      new SharePointIngestionProcessor(repository, graph, storage).process({
+        consumerName: 'ingest-worker',
+        expectedStateVersion: 1,
+        ingestionId: claim.ingestionId,
+        leaseDurationMs: 30_000,
+        leaseOwner: 'worker-2',
+        messageId: 'message-2',
+        messageType:
+          'aiflow.document.ingest.connector.microsoft-sharepoint.requested.v1',
+        projectId: claim.projectId,
+        tenantId: claim.tenantId,
+      }),
+    ).resolves.toBe('PROCESSED');
+    expect(openContent).not.toHaveBeenCalled();
+    expect(storage.putImmutableStreaming).not.toHaveBeenCalled();
     expect(repository.completed).toEqual(storageMetadata);
   });
 

@@ -150,6 +150,7 @@ export class FoundationSchedulerService
         if (lease === undefined) return;
         await sharePointRecovery.enqueueDueReconciliations(100);
         await sharePointIngestionRecovery.recoverExpiredLeases(100);
+        await sharePointRecovery.purgeExpiredNotificationEvents(500);
       }),
     ];
   }

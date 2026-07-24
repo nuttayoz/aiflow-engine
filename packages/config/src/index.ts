@@ -91,7 +91,11 @@ export interface SharePointRuntimeConfig {
   graphClientSecret?: string;
   graphMode: 'FAKE' | 'MICROSOFT_GRAPH';
   graphRequestTimeoutMs: number;
+  ingestionConcurrencyPerConnection: number;
+  ingestionConcurrencyPerTenant: number;
   rootKey: Uint8Array;
+  syncConcurrencyPerConnection: number;
+  syncConcurrencyPerTenant: number;
 }
 
 interface IntegerOptions {
@@ -636,6 +640,42 @@ export const loadSharePointRuntimeConfig = (
         name: 'SHAREPOINT_GRAPH_REQUEST_TIMEOUT_MS',
       },
     ),
+    ingestionConcurrencyPerConnection: readInteger(
+      environment.SHAREPOINT_INGESTION_CONCURRENCY_PER_CONNECTION,
+      {
+        defaultValue: 4,
+        maximum: 100,
+        minimum: 1,
+        name: 'SHAREPOINT_INGESTION_CONCURRENCY_PER_CONNECTION',
+      },
+    ),
+    ingestionConcurrencyPerTenant: readInteger(
+      environment.SHAREPOINT_INGESTION_CONCURRENCY_PER_TENANT,
+      {
+        defaultValue: 8,
+        maximum: 500,
+        minimum: 1,
+        name: 'SHAREPOINT_INGESTION_CONCURRENCY_PER_TENANT',
+      },
+    ),
     rootKey: new Uint8Array(rootKey),
+    syncConcurrencyPerConnection: readInteger(
+      environment.SHAREPOINT_SYNC_CONCURRENCY_PER_CONNECTION,
+      {
+        defaultValue: 2,
+        maximum: 50,
+        minimum: 1,
+        name: 'SHAREPOINT_SYNC_CONCURRENCY_PER_CONNECTION',
+      },
+    ),
+    syncConcurrencyPerTenant: readInteger(
+      environment.SHAREPOINT_SYNC_CONCURRENCY_PER_TENANT,
+      {
+        defaultValue: 4,
+        maximum: 200,
+        minimum: 1,
+        name: 'SHAREPOINT_SYNC_CONCURRENCY_PER_TENANT',
+      },
+    ),
   };
 };

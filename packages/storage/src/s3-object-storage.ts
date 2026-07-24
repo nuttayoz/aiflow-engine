@@ -570,6 +570,12 @@ export class S3ObjectStorage
     return this.headObject(input.key, input.versionId);
   }
 
+  async headCurrentVersion(input: {
+    key: string;
+  }): Promise<StoredObjectMetadata | undefined> {
+    return this.headObject(input.key);
+  }
+
   private async headObject(
     key: string,
     versionId?: string,

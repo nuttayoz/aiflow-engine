@@ -199,9 +199,13 @@ describe('SharePoint runtime configuration', () => {
       currentKeyVersion: 3,
       graphMode: 'FAKE',
       graphRequestTimeoutMs: 30_000,
+      ingestionConcurrencyPerConnection: 4,
+      ingestionConcurrencyPerTenant: 8,
       rootKey: new Uint8Array(
         Buffer.from('aiflow-local-sharepoint-root-key-1'),
       ),
+      syncConcurrencyPerConnection: 2,
+      syncConcurrencyPerTenant: 4,
     });
   });
 

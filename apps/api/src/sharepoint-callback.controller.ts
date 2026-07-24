@@ -21,6 +21,7 @@ import {
   DatabaseService,
   PostgresSharePointRepository,
 } from '@aiflow/database';
+import { RuntimeTelemetry } from '@aiflow/observability';
 
 import type { AuthorizedRequest } from './api-auth';
 
@@ -30,6 +31,7 @@ export class SharePointCallbackService implements OnApplicationBootstrap {
 
   constructor(
     @Inject(DatabaseService) private readonly database: DatabaseService,
+    @Inject(RuntimeTelemetry) private readonly telemetry: RuntimeTelemetry,
   ) {}
 
   onApplicationBootstrap(): void {
@@ -50,6 +52,11 @@ export class SharePointCallbackService implements OnApplicationBootstrap {
       bodySha256: createHash('sha256').update(rawBody).digest('hex'),
       receivedAt: new Date(),
     });
+    this.telemetry.recordConnector(
+      'microsoft-sharepoint',
+      'callback',
+      'accepted',
+    );
   }
 
   private requireIntake(): SharePointNotificationIntake {
