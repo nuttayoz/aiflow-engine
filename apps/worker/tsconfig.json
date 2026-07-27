@@ -12,6 +12,7 @@
     { "path": "../../packages/config" },
     { "path": "../../packages/connectors/direct-upload" },
     { "path": "../../packages/connectors/microsoft-business-central" },
+    { "path": "../../packages/connectors/microsoft-sharepoint" },
     { "path": "../../packages/connectors/phase1-synthetic" },
     { "path": "../../packages/connector-sdk" },
     { "path": "../../packages/core" },

@@ -18,6 +18,7 @@ export type CoreCommandType =
   | 'aiflow.workflow.provisioning.requested.v1';
 
 export type ConnectorCommandType =
+  | `aiflow.connector.${string}.watch.reconcile.requested.v1`
   | `aiflow.document.ingest.connector.${string}.requested.v1`
   | `aiflow.execution.stage.deliver.connector.${string}.requested.v1`;
 
@@ -208,6 +209,19 @@ const validateData = (envelope: MutableMessageEnvelope): boolean => {
       isNonEmptyString(data.connectorId) &&
       isStateVersion(data.expectedStateVersion) &&
       hasOnlyKeys(data, ['ingestionId', 'connectorId', 'expectedStateVersion'])
+    );
+  }
+
+  if (type.startsWith('aiflow.connector.') && type.includes('.watch.')) {
+    return (
+      isNonEmptyString(data.watchId) &&
+      isStateVersion(data.expectedStateVersion) &&
+      isStateVersion(data.expectedNotificationGeneration) &&
+      hasOnlyKeys(data, [
+        'watchId',
+        'expectedStateVersion',
+        'expectedNotificationGeneration',
+      ])
     );
   }
 

@@ -13,9 +13,26 @@ export interface ConnectorActionView {
 
 export interface ConnectorView {
   readonly actions: readonly ConnectorActionView[];
+  readonly connectionConfigurationSchema?: Readonly<Record<string, unknown>>;
+  readonly connectionConfigurationSchemaVersion?: number;
   readonly connectorId: string;
   readonly displayName: string;
   readonly version: number;
+}
+
+export interface ConnectionResourceView {
+  readonly containerResourceId?: string;
+  readonly id: string;
+  readonly label: string;
+  readonly parentResourceId?: string;
+  readonly resourceType: 'DRIVE' | 'FOLDER' | 'SITE';
+  readonly rootResourceId?: string;
+  readonly selectable: boolean;
+}
+
+export interface ConnectionAuthorizationView {
+  readonly status: 'AUTHORIZED' | 'CONSENT_REQUIRED';
+  readonly url?: string | null;
 }
 
 export interface ExtractionProfileView {
@@ -231,13 +248,14 @@ export class AiFlowClient {
   }
 
   createConnection(input: {
+    readonly configuration?: Readonly<Record<string, unknown>>;
     readonly connectorId: string;
     readonly displayName: string;
     readonly idempotencyKey?: string;
   }): Promise<ConnectionView> {
     return this.request('/api/v1/connections', {
       body: JSON.stringify({
-        configuration: {},
+        configuration: input.configuration ?? {},
         connectorId: input.connectorId,
         displayName: input.displayName,
       }),
@@ -247,6 +265,68 @@ export class AiFlowClient {
       },
       method: 'POST',
     });
+  }
+
+  listConnectionResources(input: {
+    readonly connectionId: string;
+    readonly containerResourceId?: string;
+    readonly cursor?: string;
+    readonly parentResourceId?: string;
+    readonly resourceType: ConnectionResourceView['resourceType'];
+    readonly search?: string;
+  }): Promise<readonly ConnectionResourceView[]> {
+    const query = new URLSearchParams({ resourceType: input.resourceType });
+    if (input.containerResourceId !== undefined) {
+      query.set('containerResourceId', input.containerResourceId);
+    }
+    if (input.cursor !== undefined) query.set('cursor', input.cursor);
+    if (input.parentResourceId !== undefined) {
+      query.set('parentResourceId', input.parentResourceId);
+    }
+    if (input.search !== undefined) query.set('search', input.search);
+    return this.requestList(
+      `/api/v1/connections/${encodeURIComponent(input.connectionId)}/resources?${query.toString()}`,
+    );
+  }
+
+  getConnectionAuthorization(
+    connectionId: string,
+  ): Promise<ConnectionAuthorizationView> {
+    return this.request(
+      `/api/v1/connections/${encodeURIComponent(connectionId)}/authorization`,
+    );
+  }
+
+  createConnectionAuthorizationSession(input: {
+    readonly connectionId: string;
+    readonly redirectUri: string;
+  }): Promise<ConnectionAuthorizationView> {
+    return this.request(
+      `/api/v1/connections/${encodeURIComponent(input.connectionId)}/authorization-sessions`,
+      {
+        body: JSON.stringify({ redirectUri: input.redirectUri }),
+        method: 'POST',
+      },
+    );
+  }
+
+  completeConnectionAuthorization(input: {
+    readonly adminConsent: boolean;
+    readonly connectionId: string;
+    readonly state: string;
+    readonly tenantId: string;
+  }): Promise<ConnectionAuthorizationView> {
+    return this.request(
+      `/api/v1/connections/${encodeURIComponent(input.connectionId)}/authorization-completions`,
+      {
+        body: JSON.stringify({
+          adminConsent: input.adminConsent,
+          state: input.state,
+          tenantId: input.tenantId,
+        }),
+        method: 'POST',
+      },
+    );
   }
 
   listConnections(connectorId?: string): Promise<readonly ConnectionView[]> {

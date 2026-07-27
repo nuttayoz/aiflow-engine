@@ -7,6 +7,7 @@ import {
   loadRabbitMqRuntimeConfig,
   loadRuntimeConfig,
   loadS3RuntimeConfig,
+  loadSharePointRuntimeConfig,
 } from './index';
 
 describe('runtime configuration', () => {
@@ -174,6 +175,59 @@ describe('S3 runtime configuration', () => {
         S3_REGION: 'ap-southeast-1',
       }),
     ).toThrow('S3_ENDPOINT must be a valid HTTPS URL');
+  });
+});
+
+describe('SharePoint runtime configuration', () => {
+  const rootKeyBase64 = Buffer.from(
+    'aiflow-local-sharepoint-root-key-1',
+  ).toString('base64');
+  const callbackUrl =
+    'http://localhost:3000/provider-callbacks/v1/microsoft-graph/sharepoint';
+
+  it('loads bounded local key material and the fixed callback path', () => {
+    expect(
+      loadSharePointRuntimeConfig({
+        SHAREPOINT_CALLBACK_URL: callbackUrl,
+        SHAREPOINT_KEY_VERSION: '3',
+        SHAREPOINT_ROOT_KEY_BASE64: rootKeyBase64,
+      }),
+    ).toEqual({
+      allowedConsentRedirectOrigins: ['http://localhost:3001'],
+      allowedDownloadHostSuffixes: ['.sharepoint.com', '.1drv.com'],
+      callbackUrl,
+      currentKeyVersion: 3,
+      graphMode: 'FAKE',
+      graphRequestTimeoutMs: 30_000,
+      ingestionConcurrencyPerConnection: 4,
+      ingestionConcurrencyPerTenant: 8,
+      rootKey: new Uint8Array(
+        Buffer.from('aiflow-local-sharepoint-root-key-1'),
+      ),
+      syncConcurrencyPerConnection: 2,
+      syncConcurrencyPerTenant: 4,
+    });
+  });
+
+  it('requires HTTPS in production and at least 32 key bytes', () => {
+    expect(() =>
+      loadSharePointRuntimeConfig({
+        NODE_ENV: 'production',
+        SHAREPOINT_CALLBACK_URL: callbackUrl,
+        SHAREPOINT_CONSENT_REDIRECT_ORIGINS: 'https://portal.example.com',
+        SHAREPOINT_GRAPH_CLIENT_ID: '11111111-1111-4111-8111-111111111111',
+        SHAREPOINT_GRAPH_CLIENT_SECRET: 'production-test-secret',
+        SHAREPOINT_ROOT_KEY_BASE64: rootKeyBase64,
+      }),
+    ).toThrow(
+      'SHAREPOINT_CALLBACK_URL must be the public HTTPS SharePoint callback',
+    );
+    expect(() =>
+      loadSharePointRuntimeConfig({
+        SHAREPOINT_CALLBACK_URL: callbackUrl,
+        SHAREPOINT_ROOT_KEY_BASE64: Buffer.from('too-short').toString('base64'),
+      }),
+    ).toThrow('SHAREPOINT_ROOT_KEY_BASE64 must decode to 32-64 bytes');
   });
 });
 

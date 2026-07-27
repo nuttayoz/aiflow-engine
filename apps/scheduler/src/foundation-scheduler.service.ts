@@ -17,7 +17,10 @@ import {
   PostgresOutboxRepository,
   PostgresPipelineRepository,
   PostgresSchedulerLeaseRepository,
+  PostgresSharePointIngestionRecoveryRepository,
+  PostgresSharePointRecoveryRepository,
   PostgresUploadSessionRepository,
+  PostgresWorkflowProvisioningRecoveryRepository,
 } from '@aiflow/database';
 import {
   OutboxPublisher,
@@ -69,6 +72,20 @@ export class FoundationSchedulerService
       this.database.dataSource,
       schema,
     );
+    const sharePointRecovery = new PostgresSharePointRecoveryRepository(
+      this.database.dataSource,
+      schema,
+    );
+    const sharePointIngestionRecovery =
+      new PostgresSharePointIngestionRecoveryRepository(
+        this.database.dataSource,
+        schema,
+      );
+    const workflowProvisioningRecovery =
+      new PostgresWorkflowProvisioningRecoveryRepository(
+        this.database.dataSource,
+        schema,
+      );
     this.storage = new S3ObjectStorage(this.s3Config);
 
     this.loops = [
@@ -92,6 +109,7 @@ export class FoundationSchedulerService
         await recovery.recoverExpiredLeases(100, 1_000);
         await recovery.enqueueDueRetries(100);
         await pipeline.enqueueDueDeliveryReconciliations(100);
+        await workflowProvisioningRecovery.recoverExpiredLeases(100);
       }),
       this.runLoop('upload-expiry', 5_000, async () => {
         const lease = await leases.acquire({
@@ -129,6 +147,17 @@ export class FoundationSchedulerService
             }
           }
         }
+      }),
+      this.runLoop('sharepoint-recovery', 5_000, async () => {
+        const lease = await leases.acquire({
+          durationMs: 10_000,
+          jobName: 'sharepoint-recovery',
+          owner: this.owner,
+        });
+        if (lease === undefined) return;
+        await sharePointRecovery.enqueueDueReconciliations(100);
+        await sharePointIngestionRecovery.recoverExpiredLeases(100);
+        await sharePointRecovery.purgeExpiredNotificationEvents(500);
       }),
     ];
   }

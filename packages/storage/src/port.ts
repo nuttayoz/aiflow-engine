@@ -15,6 +15,14 @@ export interface PutObjectInput {
   readonly stream: Readable;
 }
 
+export interface PutStreamingObjectInput {
+  readonly contentLength: number;
+  readonly contentType: string;
+  readonly key: string;
+  readonly maximumBytes: number;
+  readonly stream: Readable;
+}
+
 export interface ReadObjectInput {
   readonly expectedChecksum: StorageChecksum;
   readonly key: string;
@@ -99,11 +107,17 @@ export interface DirectUploadStoragePort {
 
 export interface ObjectStoragePort {
   deleteExactVersion(input: DeleteObjectInput): Promise<void>;
+  headCurrentVersion(input: {
+    key: string;
+  }): Promise<StoredObjectMetadata | undefined>;
   headExactVersion(input: {
     key: string;
     versionId: string;
   }): Promise<StoredObjectMetadata | undefined>;
   putImmutable(input: PutObjectInput): Promise<StoredObjectMetadata>;
+  putImmutableStreaming(
+    input: PutStreamingObjectInput,
+  ): Promise<StoredObjectMetadata>;
   readExactVersion(input: ReadObjectInput): Promise<Readable>;
 }
 

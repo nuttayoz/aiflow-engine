@@ -6,5 +6,14 @@
   "types": "dist/index.d.ts",
   "files": [
     "dist"
-  ]
+  ],
+  "dependencies": {
+    "@aiflow/connections": "workspace:*",
+    "@aiflow/connector-sdk": "workspace:*",
+    "@aiflow/storage": "workspace:*",
+    "@aiflow/workflows": "workspace:*"
+  },
+  "devDependencies": {
+    "@aiflow/connector-test-suite": "workspace:*"
+  }
 }

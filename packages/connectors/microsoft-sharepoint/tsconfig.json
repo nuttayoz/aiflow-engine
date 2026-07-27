@@ -7,5 +7,10 @@
     "tsBuildInfoFile": "dist/tsconfig.tsbuildinfo"
   },
   "include": ["src/**/*.ts"],
-  "exclude": ["src/**/*.spec.ts"]
+  "exclude": ["src/**/*.spec.ts"],
+  "references": [
+    { "path": "../../connector-sdk" },
+    { "path": "../../storage" },
+    { "path": "../../workflows" }
+  ]
 }

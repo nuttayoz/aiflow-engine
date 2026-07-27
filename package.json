@@ -55,6 +55,8 @@
     "phase2:demo": "node tools/demo-ui/server.cjs",
     "phase2:prepare": "bun run infra:up && bun run db:migrate",
     "phase2:smoke": "bun run build && node --env-file-if-exists=.env scripts/phase2-smoke.cjs",
+    "phase4:prepare": "bun run infra:up && bun run db:migrate",
+    "phase4:smoke": "bun run build && node --env-file-if-exists=.env scripts/phase4-smoke.cjs",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "test": "jest --runInBand",

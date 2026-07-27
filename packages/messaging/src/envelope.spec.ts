@@ -59,4 +59,30 @@ describe('message envelope v1', () => {
       ),
     ).toEqual({ code: 'MESSAGE_DATA_INVALID', valid: false });
   });
+
+  it('accepts a SharePoint watch command with guards only', () => {
+    const watchCommand = createMessageEnvelope({
+      actor: { id: 'sharepoint-callback', type: 'SERVICE' },
+      causationId: 'notification-1',
+      correlationId: 'correlation-1',
+      data: {
+        expectedNotificationGeneration: 3,
+        expectedStateVersion: 2,
+        watchId: 'watch-1',
+      },
+      projectId: 'project-1',
+      tenantId: 'tenant-1',
+      type: 'aiflow.connector.microsoft-sharepoint.watch.reconcile.requested.v1',
+    });
+
+    expect(
+      validateMessageEnvelope(encodeMessageEnvelope(watchCommand)),
+    ).toEqual({
+      envelope: watchCommand,
+      valid: true,
+    });
+    expect(routingKeyForMessageType(watchCommand.type)).toBe(
+      'connector.microsoft-sharepoint.watch.reconcile.requested.v1',
+    );
+  });
 });

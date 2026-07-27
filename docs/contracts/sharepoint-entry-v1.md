@@ -1,10 +1,32 @@
 # Microsoft SharePoint Entry Contract v1
 
-Status: Phase 0B proposal for Phase 4 implementation.
+Status: Phase 4 code complete. Local behavior is proven; real Microsoft and
+deployment-platform acceptance remain gated.
 
 This contract defines how AiFlow Engine discovers new documents in Microsoft SharePoint Online, stages their bytes in engine-managed object storage, and starts the same provider-neutral execution used by direct upload. It covers Microsoft Graph connection and permission boundaries, workflow configuration, shared subscriptions, webhook handling, delta reconciliation, source-version deduplication, renewal, recovery, and scaling.
 
 It does not add a SharePoint execution state, send documents through an API, or implement a SharePoint destination action. A future destination action needs its own write/idempotency contract.
+
+## Implementation status
+
+The engine now implements the managed-entry descriptor, durable binding/watch/
+scope/inventory/notification/ingestion model, strict callback intake,
+provisioning and baseline, delta reconciliation, subscription renewal,
+Graph-to-S3 streaming, source-version deduplication, lease recovery, scheduled
+backstop, real Entra/Graph boundaries, resource discovery, managed
+deactivation/handover, cursor rebaseline, subtree reconciliation, crash-safe
+S3 adoption, admission fairness, connector metrics, and the normal document
+execution handoff.
+
+The existing DevPortal journey can configure a SharePoint connection and
+workflow with stable IDs and show the resulting execution. A deterministic fake
+Graph adapter proves the complete local path and is unavailable in production.
+The real adapter is implemented and production startup requires its
+credentials. Real Microsoft permission/consent acceptance, Kubernetes network
+and scaling controls, approved product/retention values, and
+production-equivalent load/security evidence remain release gates. See
+[`../security/sharepoint-entry-review.md`](../security/sharepoint-entry-review.md)
+for the explicit findings.
 
 ## Legacy evidence and target
 
@@ -197,7 +219,7 @@ Microsoft Graph calls a separate public provider boundary:
 POST /provider-callbacks/v1/microsoft-graph/sharepoint
 ```
 
-This endpoint does not accept an end-user bearer token, tenant header, project ID, workflow ID, provider URL, document bytes, or resource data.
+This endpoint does not accept an end-user bearer token, tenant header, project ID, workflow ID, provider URL, document bytes, encrypted content, or rich resource data. A basic notification may contain Graph's bounded resource identifier projection; the boundary validates and discards it because delta remains authoritative.
 
 ### Validation challenge
 
@@ -207,7 +229,7 @@ For a bounded `validationToken` query, the endpoint URL-decodes the opaque token
 
 For each notification in a bounded collection, the callback:
 
-1. validates content type, body size, JSON shape, collection count, and bounded fields;
+1. validates content type, body size, JSON shape, collection count, bounded fields, and any basic resource identifier projection, then discards that projection;
 2. finds the watch by exact stored `subscriptionId` without trusting a tenant hint;
 3. derives and constant-time compares expected `clientState`;
 4. verifies external tenant, resource, change type/lifecycle type, and subscription context against the watch;
@@ -344,13 +366,17 @@ Alerts cover imminent expiry, failed renewal/recreation, stale delta cursor, sus
 
 ## Retention
 
-- Notification-event rows are short-lived deduplication/audit hints; the initial proposal is 30 days.
+- Notification-event rows are short-lived deduplication/audit hints. The
+  implemented default is 30 days, and the scheduler deletes expired rows in
+  bounded batches.
 - Item inventory and source-version tombstones live while a watch or its recovery window needs them. They are deleted only after subscription absence, binding cleanup, and the approved recovery period.
 - Ingestion metadata follows document/execution/audit retention and keeps the small source-version tombstone needed to prevent replay.
 - SharePoint deletion does not shorten S3/document retention. Engine retention/deletion jobs remain authoritative.
 - No retention job deletes an unresolved watch, cursor, binding, ingestion, or provider identity required for reconciliation.
 
-Exact values require product/privacy confirmation and a Phase 4 migration/cleanup plan.
+Inventory, ingestion, document, and legal-hold values still require
+product/privacy confirmation. The notification cleanup job does not delete
+unresolved watch, cursor, binding, or ingestion state.
 
 ## Required implementation evidence
 

@@ -54,7 +54,7 @@ export const deadLetterQueueName = (sourceQueueName: string): string =>
 
 export const connectorQueueBinding = (
   connectorId: string,
-  capability: 'deliver' | 'ingest',
+  capability: 'deliver' | 'ingest' | 'sync',
 ): QueueBinding => {
   if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(connectorId)) {
     throw new Error('CONNECTOR_ID_INVALID');
@@ -64,7 +64,9 @@ export const connectorQueueBinding = (
     bindingKeys: [
       capability === 'ingest'
         ? `document.ingest.connector.${connectorId}.requested.v1`
-        : `execution.stage.deliver.connector.${connectorId}.requested.v1`,
+        : capability === 'sync'
+          ? `connector.${connectorId}.watch.reconcile.requested.v1`
+          : `execution.stage.deliver.connector.${connectorId}.requested.v1`,
     ],
     name: `aiflow.q.connector.${connectorId}.${capability}.v1`,
   };

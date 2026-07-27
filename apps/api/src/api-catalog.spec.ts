@@ -9,10 +9,14 @@ describe('API catalogs', () => {
 
     expect(
       service.connectorCatalog().map(({ connectorId }) => connectorId),
-    ).toEqual(['direct-upload', 'microsoft-business-central']);
+    ).toEqual([
+      'direct-upload',
+      'microsoft-business-central',
+      'microsoft-sharepoint',
+    ]);
     expect(
       service.connectorCatalog('ENTRY').map(({ connectorId }) => connectorId),
-    ).toEqual(['direct-upload']);
+    ).toEqual(['direct-upload', 'microsoft-sharepoint']);
     expect(
       service
         .connectorCatalog('DESTINATION')
@@ -35,6 +39,14 @@ describe('API catalogs', () => {
       service.connectorDescriptor('microsoft-business-central'),
     ).toMatchObject({
       actions: [expect.objectContaining({ connectionRequired: true })],
+    });
+    expect(service.connectorDescriptor('microsoft-sharepoint')).toMatchObject({
+      actions: [
+        expect.objectContaining({
+          connectionRequired: true,
+          provisioningMode: 'MANAGED',
+        }),
+      ],
     });
     expect(() => service.connectorDescriptor('missing')).toThrow(
       'CONNECTOR_NOT_FOUND',

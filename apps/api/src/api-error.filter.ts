@@ -6,8 +6,13 @@ import type { AuthorizedRequest } from './api-auth';
 
 const statusFor = (code: string): number => {
   if (code.endsWith('_NOT_FOUND') || code === 'RESOURCE_NOT_FOUND') return 404;
-  if (code === 'PROJECT_ACCESS_DENIED' || code === 'PERMISSION_DENIED')
+  if (
+    code === 'PROJECT_ACCESS_DENIED' ||
+    code === 'PERMISSION_DENIED' ||
+    code === 'GRAPH_PERMISSION_DENIED'
+  )
     return 403;
+  if (code === 'GRAPH_THROTTLED') return 429;
   if (code === 'AUTHENTICATION_REQUIRED') return 401;
   if (code.includes('CONFLICT') || code === 'IDEMPOTENCY_KEY_REUSED')
     return 409;

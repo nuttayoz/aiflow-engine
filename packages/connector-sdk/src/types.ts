@@ -16,6 +16,8 @@ export interface ConnectorActionDescriptor {
 
 export interface ConnectorDescriptor {
   readonly actions: readonly ConnectorActionDescriptor[];
+  readonly connectionConfigurationSchema?: ConnectorJsonSchema;
+  readonly connectionConfigurationSchemaVersion?: number;
   readonly connectorId: string;
   readonly displayName: string;
   readonly version: number;

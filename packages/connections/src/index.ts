@@ -64,3 +64,35 @@ export interface ConnectionRepository {
   revoke(input: RevokeConnectionInput): Promise<ConnectionRecord>;
   update(input: UpdateConnectionInput): Promise<ConnectionRecord>;
 }
+
+export type ConnectionResourceType = 'DRIVE' | 'FOLDER' | 'SITE';
+
+export interface ConnectionResourceQuery {
+  readonly connectionId: string;
+  readonly containerResourceId?: string;
+  readonly cursor?: string;
+  readonly parentResourceId?: string;
+  readonly resourceType: ConnectionResourceType;
+  readonly search?: string;
+  readonly tenantId: string;
+}
+
+export interface ConnectionResourceView {
+  readonly containerResourceId?: string;
+  readonly id: string;
+  readonly label: string;
+  readonly parentResourceId?: string;
+  readonly resourceType: ConnectionResourceType;
+  readonly rootResourceId?: string;
+  readonly selectable: boolean;
+}
+
+export interface ConnectionResourcePage {
+  readonly items: readonly ConnectionResourceView[];
+  readonly nextCursor?: string;
+}
+
+export interface ConnectionResourceBrowser {
+  readonly connectorId: string;
+  list(query: ConnectionResourceQuery): Promise<ConnectionResourcePage>;
+}

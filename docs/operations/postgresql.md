@@ -80,6 +80,15 @@ processing-artifact references, extraction requests/callback deduplication, and
 effective-once delivery operations. It adds nullable columns to `documents` and
 does not require a table backfill.
 
+The Phase 4 SharePoint migrations are also additive and require no data
+backfill. They add provider-neutral managed-binding and document-ingestion
+tables plus SharePoint-owned drive-watch, folder-scope, item-inventory,
+notification-deduplication, and inventory-generation state. A later constraint
+migration admits the explicit degraded-active and managed-cleanup workflow
+states without rewriting rows. Cursor fields are ciphertext-only; the schema
+has no columns for tokens, callback client-state values, download URLs, raw
+provider bodies, or document bytes.
+
 Production rollout order:
 
 1. Platform provisions the engine database, TLS trust, migration identity, runtime identity, and connection budget.
@@ -97,6 +106,14 @@ Also verify access to `processing_artifacts`, `extraction_requests`,
 `extraction_callback_events`, and `delivery_operations` before enabling Phase 2
 workers.
 
+Before enabling Phase 4 callbacks or workers, verify runtime read/write access
+to `connector_provisioning_bindings`, `document_ingestions`,
+`sharepoint_drive_watches`, `sharepoint_binding_scopes`,
+`sharepoint_drive_items`, and `sharepoint_notification_events`. Older
+application images do not query these additive tables, so mixed-version rollout
+is safe when the migration runs before the Phase 4 API, worker, and scheduler
+roles.
+
 Rollback uses the previous application image. Do not automatically run
 destructive down migrations. The `aiflow` schema and TypeORM migration history
 remain in place for forward repair or the next compatible image. Each later
@@ -111,3 +128,9 @@ object `ABANDONED`, allowing the storage cleanup workflow to remove bytes by
 exact key/version when applicable.
 
 For a failed migration, stop the rollout, retain the database state and migration logs, determine whether PostgreSQL committed the transaction, then use the migration-specific forward repair or approved restore procedure. Never edit the migration-history table manually.
+
+After any SharePoint binding, watch, inventory, notification, or ingestion row
+exists, do not run the Phase 4 migration's destructive `down` method. Roll back
+the application image while retaining the expanded schema, then use a reviewed
+forward repair. The new indexes are created transactionally on empty tables, so
+the initial migration has no populated-table lock or backfill cost.

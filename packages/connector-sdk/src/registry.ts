@@ -42,6 +42,19 @@ const assertDescriptor = (descriptor: ConnectorDescriptor): void => {
   ) {
     throw new Error('CONNECTOR_DESCRIPTOR_INVALID');
   }
+  if (
+    (descriptor.connectionConfigurationSchema === undefined) !==
+      (descriptor.connectionConfigurationSchemaVersion === undefined) ||
+    (descriptor.connectionConfigurationSchemaVersion !== undefined &&
+      (!Number.isInteger(descriptor.connectionConfigurationSchemaVersion) ||
+        descriptor.connectionConfigurationSchemaVersion < 1)) ||
+    (descriptor.connectionConfigurationSchema !== undefined &&
+      FORBIDDEN_SCHEMA_KEY.test(
+        stableJson(descriptor.connectionConfigurationSchema),
+      ))
+  ) {
+    throw new Error('CONNECTOR_CONNECTION_DESCRIPTOR_INVALID');
+  }
 
   const actionIds = new Set<string>();
   for (const action of descriptor.actions) {
@@ -65,8 +78,15 @@ const assertDescriptor = (descriptor: ConnectorDescriptor): void => {
 
 interface RegisteredConnector {
   readonly adapter: ConnectorAdapter;
+  readonly connectionValidator: ValidateFunction;
   readonly validators: ReadonlyMap<string, ValidateFunction>;
 }
+
+const emptyConnectionSchema = {
+  additionalProperties: false,
+  properties: {},
+  type: 'object',
+} as const;
 
 export class ConnectorRegistry {
   private readonly ajv: Ajv;
@@ -141,6 +161,27 @@ export class ConnectorRegistry {
     };
   }
 
+  validateConnectionConfiguration(
+    connectorId: string,
+    configuration: unknown,
+  ): ConnectorValidationResult {
+    const validator = this.connectors.get(connectorId)?.connectionValidator;
+    if (validator === undefined) {
+      return {
+        issues: [{ code: 'NOT_INSTALLED', path: 'connectorId' }],
+        valid: false,
+      };
+    }
+    if (validator(configuration)) return { valid: true };
+    return {
+      issues: (validator.errors ?? []).map((error) => ({
+        code: error.keyword.toUpperCase(),
+        path: error.instancePath || '/',
+      })),
+      valid: false,
+    };
+  }
+
   private register(adapter: ConnectorAdapter): void {
     assertDescriptor(adapter.descriptor);
 
@@ -150,6 +191,10 @@ export class ConnectorRegistry {
 
     this.connectors.set(adapter.descriptor.connectorId, {
       adapter,
+      connectionValidator: this.ajv.compile(
+        adapter.descriptor.connectionConfigurationSchema ??
+          emptyConnectionSchema,
+      ),
       validators: new Map(
         adapter.descriptor.actions.map((action) => [
           action.actionId,

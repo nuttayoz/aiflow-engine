@@ -8,6 +8,7 @@ import {
   loadObservabilityRuntimeConfig,
   loadRuntimeConfig,
   loadS3RuntimeConfig,
+  loadSharePointRuntimeConfig,
 } from '@aiflow/config';
 import { RequestContextStore } from '@aiflow/core';
 import {
@@ -34,6 +35,7 @@ const bootstrap = async (): Promise<void> => {
   const apiConfig = loadApiRuntimeConfig();
   const databaseConfig = loadDatabaseRuntimeConfig();
   const s3Config = loadS3RuntimeConfig();
+  const sharePointConfig = loadSharePointRuntimeConfig();
   telemetry = new RuntimeTelemetry(
     loadObservabilityRuntimeConfig('api'),
     runtimeConfig.environment,
@@ -49,7 +51,13 @@ const bootstrap = async (): Promise<void> => {
   });
 
   const app = await NestFactory.create(
-    ApiModule.register(databaseConfig, s3Config, telemetry),
+    ApiModule.register(
+      databaseConfig,
+      s3Config,
+      sharePointConfig,
+      runtimeConfig.environment !== 'production',
+      telemetry,
+    ),
     { logger: new NestStructuredLogger(logger), rawBody: true },
   );
 
